@@ -72,6 +72,7 @@ class Client {
     this.avgUploadSpeed = 0;
     this.avgDownloadSpeed = 0;
     this.lastCookie = 0;
+    this.deleteRuleExecutionId = 0;
     logger.info('下载器', this.alias, '初始化完毕');
   };
 
@@ -143,6 +144,8 @@ class Client {
   _fitDeleteRule (_rule, torrent, fitTimeJob) {
     const rule = { ..._rule };
     const maindata = { ...this.maindata };
+    maindata.ruleId = rule.id;
+    maindata.deleteRuleExecutionId = this.deleteRuleExecutionId;
     let fit;
     if (rule.type === 'javascript') {
       try {
@@ -274,6 +277,9 @@ class Client {
         return;
       }
       this.maindata = maindata;
+      // Add client ID and alias
+      this.maindata.clientId = this.id;
+      this.maindata.clientAlias = this.alias;
       this.maindata.leechingCount = 0;
       this.maindata.seedingCount = 0;
       this.maindata.usedSpace = 0;
@@ -417,6 +423,7 @@ class Client {
 
   async autoDelete () {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
+    this.deleteRuleExecutionId++;
     const torrents = this.maindata.torrents.sort((a, b) =>
       (a.completedTime <= 0 ? moment().unix() : a.completedTime) - (b.completedTime <= 0 ? moment().unix() : b.completedTime) ||
         a.addedTime - b.addedTime);
@@ -507,6 +514,7 @@ class Client {
 
   flashFitTime (rule) {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
+    this.deleteRuleExecutionId++;
     try {
       const torrents = this.maindata.torrents;
       for (const torrent of torrents) {
