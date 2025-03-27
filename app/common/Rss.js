@@ -337,7 +337,12 @@ class Rss {
           return;
         }
       }
-      const fitRule = fitRules[0] || {};
+      let fitRule = {};
+      if (fitRules.length > 0) {
+        const highestPriority = Math.max(...fitRules.map(rule => +rule.priority));
+        const highestPriorityRules = fitRules.filter(rule => +rule.priority === highestPriority);
+        fitRule = highestPriorityRules[Math.floor(Math.random() * highestPriorityRules.length)];
+      }
       let savePath = fitRule.savePath || this.savePath;
       if (savePath) {
         savePath = savePath.replace('{RANDOM}', util.uuid.v4().replace(/-/g, ''));
