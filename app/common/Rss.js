@@ -399,47 +399,41 @@ class Rss {
     } else {
       torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url)))).flat();
     }
-    for (const torrent of torrents) {
-      const availableClients = this.clientArr
-        .map(item => global.runningClient[item])
-        .filter(item => {
-          return !!item && !!item.status && !!item.maindata &&
-            (!this.maxClientUploadSpeed || this.maxClientUploadSpeed > item.avgUploadSpeed) &&
-            (!this.maxClientDownloadSpeed || this.maxClientDownloadSpeed > item.avgDownloadSpeed) &&
-            (!this.maxClientDownloadCount || this.maxClientDownloadCount > item.maindata.leechingCount);
-        });
-      const firstClient = availableClients
-        .filter(item => {
-          return (!item.maxDownloadSpeed || item.maxDownloadSpeed > item.avgDownloadSpeed) &&
-            (!item.maxUploadSpeed || item.maxUploadSpeed > item.avgUploadSpeed) &&
-            (!item.maxLeechNum || item.maxLeechNum > item.maindata.leechingCount) &&
-            (!item.minFreeSpace || item.minFreeSpace < item.maindata.freeSpaceOnDisk);
-        })
-        .sort((a, b) => (this.clientSortBy === 'freeSpaceOnDisk' ? -1 : 1) *
-          (a.maindata[this.clientSortBy] - b.maindata[this.clientSortBy])
-        )[0] || availableClients[0];
-      const sqlRes = await util.getRecord('SELECT * FROM torrents WHERE hash = ? AND rss_id = ?', [torrent.hash, this.id]);
-      if (sqlRes && sqlRes.id) continue;
-      if (torrent.name.indexOf('[FROZEN]') !== -1) continue;
-      if (this.addCount >= this.addCountPerHour) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
-        return;
-      }
-      if (moment().unix() - this.lastRssTime > +this.maxSleepTime) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 最长休眠时间']);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 最长休眠时间');
-        continue;
-      }
-      if (!firstClient) {
+    
+    // 获取所有可用的下载器
+    const availableClients = this.clientArr
+      .map(item => global.runningClient[item])
+      .filter(item => {
+        return !!item && !!item.status && !!item.maindata &&
+          (!this.maxClientUploadSpeed || this.maxClientUploadSpeed > item.avgUploadSpeed) &&
+          (!this.maxClientDownloadSpeed || this.maxClientDownloadSpeed > item.avgDownloadSpeed) &&
+          (!this.maxClientDownloadCount || this.maxClientDownloadCount > item.maindata.leechingCount);
+      })
+      .filter(item => {
+        return (!item.maxDownloadSpeed || item.maxDownloadSpeed > item.avgDownloadSpeed) &&
+          (!item.maxUploadSpeed || item.maxUploadSpeed > item.avgUploadSpeed) &&
+          (!item.maxLeechNum || item.maxLeechNum > item.maindata.leechingCount) &&
+          (!item.minFreeSpace || item.minFreeSpace < item.maindata.freeSpaceOnDisk);
+      });
+    
+    if (availableClients.length === 0) {
+      logger.error(this.alias, '无可用下载器');
+      for (const torrent of torrents) {
         await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
           [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 无可用下载器']);
         await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 无可用下载器');
-        logger.error(this.alias, '无可用下载器');
-        continue;
       }
+      return;
+    }
+    
+    // 过滤掉已处理和被冻结的种子
+    const newTorrents = [];
+    for (const torrent of torrents) {
+      const sqlRes = await util.getRecord('SELECT * FROM torrents WHERE hash = ? AND rss_id = ?', [torrent.hash, this.id]);
+      if (sqlRes && sqlRes.id) continue;
+      if (torrent.name.indexOf('[FROZEN]') !== -1) continue;
+      
+      // 检查拒绝规则
       let reject = false;
       for (const rejectRule of this.rejectRules) {
         if (this._fitRule(rejectRule, torrent)) {
@@ -450,10 +444,203 @@ class Rss {
           break;
         }
       }
-      if (!reject) {
-        await this._pushTorrent(torrent, firstClient);
+      if (reject) continue;
+      
+      newTorrents.push(torrent);
+    }
+    
+    // 检查每小时推送上限
+    if (this.addCount + newTorrents.length > this.addCountPerHour) {
+      for (const torrent of newTorrents) {
+        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
+        await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
+      }
+      return;
+    }
+    
+    // 检查最长休眠时间
+    if (moment().unix() - this.lastRssTime > +this.maxSleepTime) {
+      for (const torrent of newTorrents) {
+        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 最长休眠时间']);
+        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 最长休眠时间');
+      }
+      this.lastRssTime = moment().unix();
+      return;
+    }
+    
+    // 如果没有有效种子，直接返回
+    if (newTorrents.length === 0) {
+      this.lastRssTime = moment().unix();
+      return;
+    }
+    
+    // 智能分配种子到下载器
+    const clientAssignments = {};
+    
+    // 当排序规则是"当前剩余空间"时，进行智能分配
+    if (this.clientSortBy === 'freeSpaceOnDisk') {
+      // 按照种子大小从大到小排序
+      newTorrents.sort((a, b) => +b.size - +a.size);
+      
+      // 按照剩余空间从大到小排序下载器
+      const sortedClients = [...availableClients].sort((a, b) => 
+        b.maindata.freeSpaceOnDisk - a.maindata.freeSpaceOnDisk
+      );
+      
+      // 记录每个下载器已分配的种子大小总和
+      const clientTotalSize = {};
+      // 记录每个下载器分配的种子数量
+      const clientTorrentCount = {};
+      sortedClients.forEach(client => {
+        clientTotalSize[client.id] = 0;
+        clientTorrentCount[client.id] = 0;
+        clientAssignments[client.id] = [];
+      });
+      
+      // 计算最大平均种子数（确保至少每个客户端有些种子）
+      const avgTorrentsPerClient = Math.ceil(newTorrents.length / sortedClients.length);
+      // 计算大型种子的阈值 (>50GB视为大型种子)
+      const largeTorrentThreshold = 50 * 1024 * 1024 * 1024;
+      
+      // 第一阶段：只处理大型种子，优先分配给大空间下载器
+      const largeTorrents = newTorrents.filter(t => +t.size > largeTorrentThreshold);
+      const smallTorrents = newTorrents.filter(t => +t.size <= largeTorrentThreshold);
+      
+      // 处理大型种子
+      for (const torrent of largeTorrents) {
+        // 按已分配空间比例计算出最佳下载器
+        // 使用对数函数降低空间差异的影响
+        let bestClient = sortedClients[0];
+        let bestScore = Math.log10(sortedClients[0].maindata.freeSpaceOnDisk) / 
+                       (clientTotalSize[sortedClients[0].id] / (1024*1024*1024) + 1);
+        
+        for (let i = 1; i < sortedClients.length; i++) {
+          const client = sortedClients[i];
+          // 跳过空间不足的客户端 (至少要比种子大2倍)
+          if (client.maindata.freeSpaceOnDisk < torrent.size * 2) continue;
+          
+          const score = Math.log10(client.maindata.freeSpaceOnDisk) / 
+                       (clientTotalSize[client.id] / (1024*1024*1024) + 1);
+          
+          if (score > bestScore) {
+            bestScore = score;
+            bestClient = client;
+          }
+        }
+        
+        // 分配种子到选定的下载器
+        clientAssignments[bestClient.id].push(torrent);
+        clientTotalSize[bestClient.id] += +torrent.size;
+        clientTorrentCount[bestClient.id]++;
+      }
+      
+      // 第二阶段：处理小型种子，更均匀分配
+      // 对下载器按目前分配的种子数量排序
+      const clientsByTorrentCount = [...sortedClients].sort((a, b) => 
+        clientTorrentCount[a.id] - clientTorrentCount[b.id]
+      );
+      
+      for (const torrent of smallTorrents) {
+        // 找出当前分配种子数量最少的且空间足够的下载器
+        let selectedClient = null;
+        
+        for (const client of clientsByTorrentCount) {
+          // 确保下载器有足够空间
+          if (client.maindata.freeSpaceOnDisk > torrent.size * 1.5) {
+            selectedClient = client;
+            break;
+          }
+        }
+        
+        // 如果没找到合适的下载器，使用空间最大的
+        if (!selectedClient) {
+          selectedClient = sortedClients[0];
+        }
+        
+        // 分配种子
+        clientAssignments[selectedClient.id].push(torrent);
+        clientTotalSize[selectedClient.id] += +torrent.size;
+        clientTorrentCount[selectedClient.id]++;
+        
+        // 重新排序下载器列表，始终选择当前种子数最少的
+        clientsByTorrentCount.sort((a, b) => 
+          clientTorrentCount[a.id] - clientTorrentCount[b.id]
+        );
+      }
+      
+      // 第三阶段：平衡检查 - 如果有些下载器分配过多，重新分配一部分
+      const totalTorrents = newTorrents.length;
+      const maxTorrentsPerClient = Math.max(
+        avgTorrentsPerClient * 2,
+        Math.ceil(totalTorrents * 0.5) // 不超过总种子数的50%
+      );
+      
+      // 检查是否有下载器分配过多种子
+      for (const clientId in clientTorrentCount) {
+        // 如果某个下载器种子过多
+        if (clientTorrentCount[clientId] > maxTorrentsPerClient) {
+          const excessCount = clientTorrentCount[clientId] - maxTorrentsPerClient;
+          const torrentsToRedistribute = clientAssignments[clientId].slice(0, excessCount);
+          clientAssignments[clientId] = clientAssignments[clientId].slice(excessCount);
+          clientTorrentCount[clientId] = maxTorrentsPerClient;
+          
+          // 重新分配这些种子
+          for (const torrent of torrentsToRedistribute) {
+            // 找到当前种子数最少的下载器
+            const targetClient = [...sortedClients]
+              .filter(c => c.id !== clientId) // 排除当前下载器
+              .sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id])[0];
+            
+            if (targetClient) {
+              clientAssignments[targetClient.id].push(torrent);
+              clientTorrentCount[targetClient.id]++;
+            } else {
+              // 如果没有其他下载器，放回原下载器
+              clientAssignments[clientId].push(torrent);
+              clientTorrentCount[clientId]++;
+            }
+          }
+        }
+      }
+      
+      // 输出分配统计信息到日志
+      logger.debug(this.alias, '种子分配情况:');
+      for (const clientId in clientTorrentCount) {
+        const client = global.runningClient[clientId];
+        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, 总大小: ${util.formatSize(clientTotalSize[clientId])}`);
+      }
+    } else {
+      // 其他排序规则，使用简单轮询
+      availableClients.forEach(client => {
+        clientAssignments[client.id] = [];
+      });
+      
+      // 按照下载器排序方式排序
+      const sortedClients = [...availableClients].sort((a, b) => 
+        (this.clientSortBy === 'freeSpaceOnDisk' ? -1 : 1) *
+        (a.maindata[this.clientSortBy] - b.maindata[this.clientSortBy])
+      );
+      
+      // 轮询分配
+      for (let i = 0; i < newTorrents.length; i++) {
+        const clientIndex = i % sortedClients.length;
+        const client = sortedClients[clientIndex];
+        clientAssignments[client.id].push(newTorrents[i]);
       }
     }
+    
+    // 处理每个下载器的种子分配
+    for (const clientId in clientAssignments) {
+      const client = global.runningClient[clientId];
+      const clientTorrents = clientAssignments[clientId];
+      
+      for (const torrent of clientTorrents) {
+        await this._pushTorrent(torrent, client);
+      }
+    }
+    
     this.lastRssTime = moment().unix();
   }
 
