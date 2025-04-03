@@ -479,137 +479,95 @@ class Rss {
     // 智能分配种子到下载器
     const clientAssignments = {};
     
-    // 当排序规则是"当前剩余空间"时，进行智能分配
+    // 当排序规则是"当前剩余空间"时，进行智能均匀分配
     if (this.clientSortBy === 'freeSpaceOnDisk') {
-      // 按照种子大小从大到小排序
-      newTorrents.sort((a, b) => +b.size - +a.size);
-      
-      // 按照剩余空间从大到小排序下载器
-      const sortedClients = [...availableClients].sort((a, b) => 
-        b.maindata.freeSpaceOnDisk - a.maindata.freeSpaceOnDisk
-      );
-      
-      // 记录每个下载器已分配的种子大小总和
       const clientTotalSize = {};
-      // 记录每个下载器分配的种子数量
       const clientTorrentCount = {};
-      sortedClients.forEach(client => {
-        clientTotalSize[client.id] = 0;
-        clientTorrentCount[client.id] = 0;
-        clientAssignments[client.id] = [];
+      
+      // 计算每个下载器的实际可用空间（考虑已使用空间的20%可能会被释放）
+      const clientAvailableSpace = {};
+      availableClients.forEach(client => {
+        // 已使用空间的20%可能会被自动删种释放
+        const potentialReleaseSpace = (client.maindata.usedSpace || 0) * 0.2;
+        // 实际可用空间 = 当前剩余空间 + 潜在可释放空间
+        clientAvailableSpace[client.id] = client.maindata.freeSpaceOnDisk + potentialReleaseSpace;
+        logger.debug(`下载器: ${client.alias}, 当前剩余空间: ${util.formatSize(client.maindata.freeSpaceOnDisk)}, ` +
+                    `已使用空间: ${util.formatSize(client.maindata.usedSpace || 0)}, ` +
+                    `潜在可释放空间: ${util.formatSize(potentialReleaseSpace)}, ` +
+                    `计算后可用空间: ${util.formatSize(clientAvailableSpace[client.id])}`);
       });
       
-      // 计算最大平均种子数（确保至少每个客户端有些种子）
-      const avgTorrentsPerClient = Math.ceil(newTorrents.length / sortedClients.length);
-      // 计算大型种子的阈值 (>50GB视为大型种子)
-      const largeTorrentThreshold = 50 * 1024 * 1024 * 1024;
+      // 初始化客户端分配统计
+      availableClients.forEach(client => {
+        clientAssignments[client.id] = [];
+        clientTotalSize[client.id] = 0;
+        clientTorrentCount[client.id] = 0;
+      });
       
-      // 第一阶段：只处理大型种子，优先分配给大空间下载器
-      const largeTorrents = newTorrents.filter(t => +t.size > largeTorrentThreshold);
-      const smallTorrents = newTorrents.filter(t => +t.size <= largeTorrentThreshold);
+      // 按种子大小从大到小排序，确保大种子优先分配
+      newTorrents.sort((a, b) => +b.size - +a.size);
       
-      // 处理大型种子
-      for (const torrent of largeTorrents) {
-        // 按已分配空间比例计算出最佳下载器
-        // 使用对数函数降低空间差异的影响
-        let bestClient = sortedClients[0];
-        let bestScore = Math.log10(sortedClients[0].maindata.freeSpaceOnDisk) / 
-                       (clientTotalSize[sortedClients[0].id] / (1024*1024*1024) + 1);
+      // 新的均匀分配算法
+      const skippedTorrents = []; // 存储因空间不足暂时被跳过的种子
+      
+      // 第一轮：每个下载器分配大种子
+      for (const torrent of newTorrents) {
+        // 找到当前分配种子数最少且有足够空间的下载器
+        const eligibleClients = availableClients.filter(client => 
+          clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
+        );
         
-        for (let i = 1; i < sortedClients.length; i++) {
-          const client = sortedClients[i];
-          // 跳过空间不足的客户端 (至少要比种子大2倍)
-          if (client.maindata.freeSpaceOnDisk < torrent.size * 2) continue;
-          
-          const score = Math.log10(client.maindata.freeSpaceOnDisk) / 
-                       (clientTotalSize[client.id] / (1024*1024*1024) + 1);
-          
-          if (score > bestScore) {
-            bestScore = score;
-            bestClient = client;
-          }
+        if (eligibleClients.length === 0) {
+          // 所有下载器都没有足够空间，将种子放入跳过列表
+          skippedTorrents.push(torrent);
+          continue;
         }
         
-        // 分配种子到选定的下载器
-        clientAssignments[bestClient.id].push(torrent);
-        clientTotalSize[bestClient.id] += +torrent.size;
-        clientTorrentCount[bestClient.id]++;
-      }
-      
-      // 第二阶段：处理小型种子，更均匀分配
-      // 对下载器按目前分配的种子数量排序
-      const clientsByTorrentCount = [...sortedClients].sort((a, b) => 
-        clientTorrentCount[a.id] - clientTorrentCount[b.id]
-      );
-      
-      for (const torrent of smallTorrents) {
-        // 找出当前分配种子数量最少的且空间足够的下载器
-        let selectedClient = null;
+        // 按已分配种子数量排序
+        eligibleClients.sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id]);
         
-        for (const client of clientsByTorrentCount) {
-          // 确保下载器有足够空间
-          if (client.maindata.freeSpaceOnDisk > torrent.size * 1.5) {
-            selectedClient = client;
-            break;
-          }
-        }
-        
-        // 如果没找到合适的下载器，使用空间最大的
-        if (!selectedClient) {
-          selectedClient = sortedClients[0];
-        }
-        
-        // 分配种子
+        // 分配给种子数量最少的下载器
+        const selectedClient = eligibleClients[0];
         clientAssignments[selectedClient.id].push(torrent);
         clientTotalSize[selectedClient.id] += +torrent.size;
         clientTorrentCount[selectedClient.id]++;
-        
-        // 重新排序下载器列表，始终选择当前种子数最少的
-        clientsByTorrentCount.sort((a, b) => 
-          clientTorrentCount[a.id] - clientTorrentCount[b.id]
-        );
       }
       
-      // 第三阶段：平衡检查 - 如果有些下载器分配过多，重新分配一部分
-      const totalTorrents = newTorrents.length;
-      const maxTorrentsPerClient = Math.max(
-        avgTorrentsPerClient * 2,
-        Math.ceil(totalTorrents * 0.5) // 不超过总种子数的50%
-      );
-      
-      // 检查是否有下载器分配过多种子
-      for (const clientId in clientTorrentCount) {
-        // 如果某个下载器种子过多
-        if (clientTorrentCount[clientId] > maxTorrentsPerClient) {
-          const excessCount = clientTorrentCount[clientId] - maxTorrentsPerClient;
-          const torrentsToRedistribute = clientAssignments[clientId].slice(0, excessCount);
-          clientAssignments[clientId] = clientAssignments[clientId].slice(excessCount);
-          clientTorrentCount[clientId] = maxTorrentsPerClient;
+      // 第二轮：尝试分配被跳过的种子到空间仍然足够的下载器
+      if (skippedTorrents.length > 0) {
+        logger.debug(this.alias, `第一轮分配后有 ${skippedTorrents.length} 个种子因空间不足被跳过，尝试第二轮分配`);
+        
+        for (const torrent of skippedTorrents) {
+          // 再次检查是否有下载器有足够空间
+          const clientWithSpace = availableClients.find(client => 
+            clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
+          );
           
-          // 重新分配这些种子
-          for (const torrent of torrentsToRedistribute) {
-            // 找到当前种子数最少的下载器
-            const targetClient = [...sortedClients]
-              .filter(c => c.id !== clientId) // 排除当前下载器
-              .sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id])[0];
-            
-            if (targetClient) {
-              clientAssignments[targetClient.id].push(torrent);
-              clientTorrentCount[targetClient.id]++;
-            } else {
-              // 如果没有其他下载器，放回原下载器
-              clientAssignments[clientId].push(torrent);
-              clientTorrentCount[clientId]++;
-            }
+          if (clientWithSpace) {
+            // 找到了有空间的下载器，分配种子
+            clientAssignments[clientWithSpace.id].push(torrent);
+            clientTotalSize[clientWithSpace.id] += +torrent.size;
+            clientTorrentCount[clientWithSpace.id]++;
+            logger.debug(this.alias, `种子 ${torrent.name} (${util.formatSize(torrent.size)}) 在第二轮成功分配给 ${clientWithSpace.alias}`);
+          } else {
+            // 仍然没有下载器有足够空间，记录拒绝原因
+            logger.warn(this.alias, `种子 ${torrent.name} (${util.formatSize(torrent.size)}) 无法分配，所有下载器空间不足`);
+            await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+              [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 所有下载器空间不足']);
+            await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 所有下载器空间不足');
           }
         }
       }
       
       // 输出分配统计信息到日志
-      logger.debug(this.alias, '种子分配情况:');
+      logger.debug(this.alias, '均匀种子分配结果:');
       for (const clientId in clientTorrentCount) {
         const client = global.runningClient[clientId];
-        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, 总大小: ${util.formatSize(clientTotalSize[clientId])}`);
+        const spaceUtilization = ((clientTotalSize[clientId] / clientAvailableSpace[clientId]) * 100).toFixed(2);
+        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
+                    `总大小: ${util.formatSize(clientTotalSize[clientId])}, ` +
+                    `空间利用率: ${spaceUtilization}%, ` +
+                    `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
       }
     } else {
       // 其他排序规则，使用简单轮询
@@ -628,6 +586,13 @@ class Rss {
         const clientIndex = i % sortedClients.length;
         const client = sortedClients[clientIndex];
         clientAssignments[client.id].push(newTorrents[i]);
+      }
+      
+      // 输出简单轮询分配结果
+      logger.debug(this.alias, '简单轮询分配结果:');
+      for (const clientId in clientAssignments) {
+        const client = global.runningClient[clientId];
+        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientAssignments[clientId].length}`);
       }
     }
     
