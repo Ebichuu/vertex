@@ -486,14 +486,34 @@ class Rss {
       
       // 计算每个下载器的实际可用空间（考虑已使用空间的20%可能会被释放）
       const clientAvailableSpace = {};
+      // 新增：计算下载器的权重（考虑最大上传速度）
+      const clientWeights = {};
+      
+      // 计算所有下载器的最大上传速度总和，用于归一化权重
+      const totalMaxUploadSpeed = availableClients.reduce((sum, client) => {
+        // 如果客户端未设置最大上传速度，默认为1Gbps (约125MB/s)
+        const speed = client.maxUploadSpeed || 125000000;
+        return sum + speed;
+      }, 0);
+      
       availableClients.forEach(client => {
         // 已使用空间的20%可能会被自动删种释放
         const potentialReleaseSpace = (client.maindata.usedSpace || 0) * 0.2;
         // 实际可用空间 = 当前剩余空间 + 潜在可释放空间
         clientAvailableSpace[client.id] = client.maindata.freeSpaceOnDisk + potentialReleaseSpace;
+        
+        // 新增：计算客户端权重（基于最大上传速度）
+        // 如果客户端未设置最大上传速度，默认为1Gbps (约125MB/s)
+        const clientSpeed = client.maxUploadSpeed || 125000000;
+        const uploadSpeedWeight = clientSpeed / totalMaxUploadSpeed;
+        // 权重值在0.5到2之间浮动，避免极端值
+        clientWeights[client.id] = 0.5 + uploadSpeedWeight * 1.5;
+        
         logger.debug(`下载器: ${client.alias}, 当前剩余空间: ${util.formatSize(client.maindata.freeSpaceOnDisk)}, ` +
                     `已使用空间: ${util.formatSize(client.maindata.usedSpace || 0)}, ` +
                     `潜在可释放空间: ${util.formatSize(potentialReleaseSpace)}, ` +
+                    `最大上传速度: ${util.formatSize(clientSpeed)}/s, ` +
+                    `上传速度权重: ${clientWeights[client.id].toFixed(2)}, ` +
                     `计算后可用空间: ${util.formatSize(clientAvailableSpace[client.id])}`);
       });
       
@@ -523,10 +543,14 @@ class Rss {
           continue;
         }
         
-        // 按已分配种子数量排序
-        eligibleClients.sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id]);
+        // 修改：按照加权的种子分配数量排序
+        // 权重高的下载器应该分配更多种子，因此加权计数会比实际计数低一些
+        eligibleClients.sort((a, b) => 
+          clientTorrentCount[a.id] / clientWeights[a.id] - 
+          clientTorrentCount[b.id] / clientWeights[b.id]
+        );
         
-        // 分配给种子数量最少的下载器
+        // 分配给加权种子数量最少的下载器
         const selectedClient = eligibleClients[0];
         clientAssignments[selectedClient.id].push(torrent);
         clientTotalSize[selectedClient.id] += +torrent.size;
@@ -538,17 +562,20 @@ class Rss {
         logger.debug(this.alias, `第一轮分配后有 ${skippedTorrents.length} 个种子因空间不足被跳过，尝试第二轮分配`);
         
         for (const torrent of skippedTorrents) {
-          // 再次检查是否有下载器有足够空间
-          const clientWithSpace = availableClients.find(client => 
+          // 修改：按照上传速度权重排序选择下载器
+          const eligibleClients = availableClients.filter(client => 
             clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
           );
           
-          if (clientWithSpace) {
-            // 找到了有空间的下载器，分配种子
-            clientAssignments[clientWithSpace.id].push(torrent);
-            clientTotalSize[clientWithSpace.id] += +torrent.size;
-            clientTorrentCount[clientWithSpace.id]++;
-            logger.debug(this.alias, `种子 ${torrent.name} (${util.formatSize(torrent.size)}) 在第二轮成功分配给 ${clientWithSpace.alias}`);
+          if (eligibleClients.length > 0) {
+            // 优先考虑上传速度较高的下载器
+            eligibleClients.sort((a, b) => clientWeights[b.id] - clientWeights[a.id]);
+            
+            const selectedClient = eligibleClients[0];
+            clientAssignments[selectedClient.id].push(torrent);
+            clientTotalSize[selectedClient.id] += +torrent.size;
+            clientTorrentCount[selectedClient.id]++;
+            logger.debug(this.alias, `种子 ${torrent.name} (${util.formatSize(torrent.size)}) 在第二轮成功分配给 ${selectedClient.alias}，上传速度权重: ${clientWeights[selectedClient.id].toFixed(2)}`);
           } else {
             // 仍然没有下载器有足够空间，记录拒绝原因
             logger.warn(this.alias, `种子 ${torrent.name} (${util.formatSize(torrent.size)}) 无法分配，所有下载器空间不足`);
@@ -565,6 +592,8 @@ class Rss {
         const client = global.runningClient[clientId];
         const spaceUtilization = ((clientTotalSize[clientId] / clientAvailableSpace[clientId]) * 100).toFixed(2);
         logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
+                    `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` +
+                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
                     `总大小: ${util.formatSize(clientTotalSize[clientId])}, ` +
                     `空间利用率: ${spaceUtilization}%, ` +
                     `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
