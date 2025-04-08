@@ -479,6 +479,27 @@ class Rss {
     // 智能分配种子到下载器
     const clientAssignments = {};
     
+    // 计算下载器的权重（考虑最大上传速度）
+    const clientWeights = {};
+    
+    // 计算所有下载器的最大上传速度总和，用于归一化权重
+    const totalMaxUploadSpeed = availableClients.reduce((sum, client) => {
+      // 如果客户端未设置最大上传速度，默认为10Gbps (约1250MB/s)
+      const speed = client.maxUploadSpeed || 1250000000;
+      return sum + speed;
+    }, 0);
+    
+    // 为所有下载器计算权重
+    availableClients.forEach(client => {
+      // 计算客户端权重（基于最大上传速度）
+      const clientSpeed = client.maxUploadSpeed || 1250000000;
+      const uploadSpeedWeight = clientSpeed / totalMaxUploadSpeed;
+      // 权重值在0.5到2之间浮动，避免极端值
+      clientWeights[client.id] = 0.5 + uploadSpeedWeight * 1.5;
+      
+      logger.debug(`下载器: ${client.alias}, 最大上传速度: ${util.formatSize(clientSpeed)}/s, 上传速度权重: ${clientWeights[client.id].toFixed(2)}`);
+    });
+    
     // 当排序规则是"当前剩余空间"时，进行智能均匀分配
     if (this.clientSortBy === 'freeSpaceOnDisk') {
       const clientTotalSize = {};
@@ -486,15 +507,6 @@ class Rss {
       
       // 计算每个下载器的实际可用空间（考虑已使用空间的20%可能会被释放）
       const clientAvailableSpace = {};
-      // 新增：计算下载器的权重（考虑最大上传速度）
-      const clientWeights = {};
-      
-      // 计算所有下载器的最大上传速度总和，用于归一化权重
-      const totalMaxUploadSpeed = availableClients.reduce((sum, client) => {
-        // 如果客户端未设置最大上传速度，默认为1Gbps (约125MB/s)
-        const speed = client.maxUploadSpeed || 125000000;
-        return sum + speed;
-      }, 0);
       
       availableClients.forEach(client => {
         // 已使用空间的20%可能会被自动删种释放
@@ -502,18 +514,9 @@ class Rss {
         // 实际可用空间 = 当前剩余空间 + 潜在可释放空间
         clientAvailableSpace[client.id] = client.maindata.freeSpaceOnDisk + potentialReleaseSpace;
         
-        // 新增：计算客户端权重（基于最大上传速度）
-        // 如果客户端未设置最大上传速度，默认为1Gbps (约125MB/s)
-        const clientSpeed = client.maxUploadSpeed || 125000000;
-        const uploadSpeedWeight = clientSpeed / totalMaxUploadSpeed;
-        // 权重值在0.5到2之间浮动，避免极端值
-        clientWeights[client.id] = 0.5 + uploadSpeedWeight * 1.5;
-        
         logger.debug(`下载器: ${client.alias}, 当前剩余空间: ${util.formatSize(client.maindata.freeSpaceOnDisk)}, ` +
                     `已使用空间: ${util.formatSize(client.maindata.usedSpace || 0)}, ` +
                     `潜在可释放空间: ${util.formatSize(potentialReleaseSpace)}, ` +
-                    `最大上传速度: ${util.formatSize(clientSpeed)}/s, ` +
-                    `上传速度权重: ${clientWeights[client.id].toFixed(2)}, ` +
                     `计算后可用空间: ${util.formatSize(clientAvailableSpace[client.id])}`);
       });
       
@@ -543,7 +546,7 @@ class Rss {
           continue;
         }
         
-        // 修改：按照加权的种子分配数量排序
+        // 按照加权的种子分配数量排序
         // 权重高的下载器应该分配更多种子，因此加权计数会比实际计数低一些
         eligibleClients.sort((a, b) => 
           clientTorrentCount[a.id] / clientWeights[a.id] - 
@@ -562,7 +565,7 @@ class Rss {
         logger.debug(this.alias, `第一轮分配后有 ${skippedTorrents.length} 个种子因空间不足被跳过，尝试第二轮分配`);
         
         for (const torrent of skippedTorrents) {
-          // 修改：按照上传速度权重排序选择下载器
+          // 按照上传速度权重排序选择下载器
           const eligibleClients = availableClients.filter(client => 
             clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
           );
@@ -598,10 +601,60 @@ class Rss {
                     `空间利用率: ${spaceUtilization}%, ` +
                     `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
       }
-    } else {
-      // 其他排序规则，使用简单轮询
+    } else if (this.clientSortBy === 'uploadSpeed') {
+      // 专门针对上传速度进行的智能分配 - 优先分配给上传速度低但带宽高的下载器
+      const clientTorrentCount = {};
+      
+      // 初始化客户端分配统计
       availableClients.forEach(client => {
         clientAssignments[client.id] = [];
+        clientTorrentCount[client.id] = 0;
+      });
+      
+      // 按种子大小从大到小排序，确保大种子优先分配
+      newTorrents.sort((a, b) => +b.size - +a.size);
+      
+      // 对于每个种子，都按照"当前上传速度/权重"排序下载器
+      // 这样上传速度低但带宽高的下载器会优先获得种子
+      for (const torrent of newTorrents) {
+        // 按照加权的当前上传速度排序
+        const sortedClients = [...availableClients].sort((a, b) => 
+          (a.maindata.uploadSpeed / clientWeights[a.id]) - 
+          (b.maindata.uploadSpeed / clientWeights[b.id])
+        );
+        
+        // 考虑种子分配数量来平衡负载
+        // 找出分配数量最少的前30%下载器
+        const clientCount = sortedClients.length;
+        const topClients = sortedClients.slice(0, Math.max(1, Math.floor(clientCount * 0.3)));
+        
+        // 在前30%中找当前种子数最少的
+        topClients.sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id]);
+        
+        // 分配给选中的下载器
+        const selectedClient = topClients[0];
+        clientAssignments[selectedClient.id].push(torrent);
+        clientTorrentCount[selectedClient.id]++;
+      }
+      
+      // 输出分配统计信息到日志
+      logger.debug(this.alias, '带宽加权上传速度分配结果:');
+      for (const clientId in clientTorrentCount) {
+        const client = global.runningClient[clientId];
+        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
+                    `当前上传速度: ${util.formatSize(client.maindata.uploadSpeed)}/s, ` +
+                    `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` +
+                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
+                    `加权上传速度: ${util.formatSize(client.maindata.uploadSpeed / clientWeights[clientId])}/s`);
+      }
+    } else {
+      // 其他排序规则，使用带宽权重的轮询分配
+      const clientTorrentCount = {};
+      
+      // 初始化客户端分配统计
+      availableClients.forEach(client => {
+        clientAssignments[client.id] = [];
+        clientTorrentCount[client.id] = 0;
       });
       
       // 按照下载器排序方式排序
@@ -610,18 +663,46 @@ class Rss {
         (a.maindata[this.clientSortBy] - b.maindata[this.clientSortBy])
       );
       
-      // 轮询分配
-      for (let i = 0; i < newTorrents.length; i++) {
-        const clientIndex = i % sortedClients.length;
-        const client = sortedClients[clientIndex];
-        clientAssignments[client.id].push(newTorrents[i]);
+      // 计算总权重
+      const totalWeight = sortedClients.reduce((sum, client) => sum + clientWeights[client.id], 0);
+      // 计算每个下载器应该分配的种子比例
+      const allocations = {};
+      sortedClients.forEach(client => {
+        allocations[client.id] = Math.ceil((clientWeights[client.id] / totalWeight) * newTorrents.length);
+      });
+      
+      // 根据权重分配种子
+      let currentIndex = 0;
+      for (const client of sortedClients) {
+        const allocation = allocations[client.id];
+        for (let i = 0; i < allocation && currentIndex < newTorrents.length; i++) {
+          clientAssignments[client.id].push(newTorrents[currentIndex]);
+          clientTorrentCount[client.id]++;
+          currentIndex++;
+        }
       }
       
-      // 输出简单轮询分配结果
-      logger.debug(this.alias, '简单轮询分配结果:');
-      for (const clientId in clientAssignments) {
+      // 如果还有剩余种子，按轮询方式分配
+      while (currentIndex < newTorrents.length) {
+        for (const client of sortedClients) {
+          if (currentIndex < newTorrents.length) {
+            clientAssignments[client.id].push(newTorrents[currentIndex]);
+            clientTorrentCount[client.id]++;
+            currentIndex++;
+          } else {
+            break;
+          }
+        }
+      }
+      
+      // 输出带权重轮询分配结果
+      logger.debug(this.alias, '带权重轮询分配结果:');
+      for (const clientId in clientTorrentCount) {
         const client = global.runningClient[clientId];
-        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientAssignments[clientId].length}`);
+        logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
+                    `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` + 
+                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
+                    `权重分配比例: ${Math.round((clientWeights[clientId] / totalWeight) * 100)}%`);
       }
     }
     
