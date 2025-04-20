@@ -490,12 +490,14 @@ class Rss {
     }, 0);
     
     // 为所有下载器计算权重
+    const minWeight = 0.5;
+    const maxWeight = 5;
     availableClients.forEach(client => {
       // 计算客户端权重（基于最大上传速度）
       const clientSpeed = client.maxUploadSpeed || 1250000000;
       const uploadSpeedWeight = clientSpeed / totalMaxUploadSpeed;
-      // 权重值在0.5到2之间浮动，避免极端值
-      clientWeights[client.id] = 0.5 + uploadSpeedWeight * 1.5;
+      // 权重值在0.5到5之间浮动，避免极端值
+      clientWeights[client.id] = minWeight + uploadSpeedWeight * (maxWeight - minWeight);
       
       logger.debug(`下载器: ${client.alias}, 最大上传速度: ${util.formatSize(clientSpeed)}/s, 上传速度权重: ${clientWeights[client.id].toFixed(2)}`);
     });
