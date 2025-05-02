@@ -315,12 +315,9 @@ class Rss {
         }
       }
       if (this.skipSameTorrent) {
-        for (const key of Object.keys(global.runningClient)) {
-          const client = global.runningClient[key];
-          if (!client || !client.maindata || client._client.type !== 'qBittorrent') {
-            continue;
-          }
-          for (const _torrent of client.maindata.torrents) {
+        // 只检查目标下载器中的种子，而不是所有下载器
+        if (_client && _client.maindata && _client._client.type === 'qBittorrent') {
+          for (const _torrent of _client.maindata.torrents) {
             if (+_torrent.size === +torrent.size) {
               await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
                 [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
@@ -329,7 +326,9 @@ class Rss {
             }
           }
         }
-        const sameTorrent = await util.getRecord('select * from torrents where size = ? and add_time > ?', [torrent.size, moment().unix() - 1200]);
+        // 保留数据库检查部分，检查最近添加的相同大小种子
+        const checkTime = 300; // 默认5分钟
+        const sameTorrent = await util.getRecord('select * from torrents where size = ? and add_time > ?', [torrent.size, moment().unix() - checkTime]);
         if (sameTorrent && sameTorrent.id) {
           await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
             [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
