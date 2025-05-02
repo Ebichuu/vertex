@@ -490,15 +490,16 @@ class Rss {
     
     // 为所有下载器计算权重
     const minWeight = 0.5;
-    const maxWeight = 5;
+    const maxWeight = 10; // 从5增加到10，扩大区分度
     availableClients.forEach(client => {
       // 计算客户端权重（基于最大上传速度）
       const clientSpeed = client.maxUploadSpeed || 1250000000;
-      const uploadSpeedWeight = clientSpeed / totalMaxUploadSpeed;
-      // 权重值在0.5到5之间浮动，避免极端值
+      // 使用平方根映射代替线性映射，更合理地反映带宽差异
+      const uploadSpeedWeight = Math.sqrt(clientSpeed) / Math.sqrt(totalMaxUploadSpeed);
+      // 权重值在0.5到10之间浮动，避免极端值
       clientWeights[client.id] = minWeight + uploadSpeedWeight * (maxWeight - minWeight);
       
-      logger.debug(`下载器: ${client.alias}, 最大上传速度: ${util.formatSize(clientSpeed)}/s, 上传速度权重: ${clientWeights[client.id].toFixed(2)}`);
+      logger.debug(`下载器: ${client.alias}, 最大上传速度: ${util.formatSize(clientSpeed)}/s, 平方根权重比: ${uploadSpeedWeight.toFixed(4)}, 最终权重: ${clientWeights[client.id].toFixed(2)}`);
     });
     
     // 当排序规则是"当前剩余空间"时，进行智能均匀分配
