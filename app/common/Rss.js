@@ -314,28 +314,6 @@ class Rss {
           return;
         }
       }
-      if (this.skipSameTorrent) {
-        // 只检查目标下载器中的种子，而不是所有下载器
-        if (_client && _client.maindata && _client._client.type === 'qBittorrent') {
-          for (const _torrent of _client.maindata.torrents) {
-            if (+_torrent.size === +torrent.size) {
-              await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
-              await this.ntf.rejectTorrent(this._rss, _client, torrent, '拒绝原因: 跳过同大小种子');
-              return;
-            }
-          }
-        }
-        // 保留数据库检查部分，检查最近添加的相同大小种子
-        const checkTime = 300; // 默认5分钟
-        const sameTorrent = await util.getRecord('select * from torrents where size = ? and add_time > ?', [torrent.size, moment().unix() - checkTime]);
-        if (sameTorrent && sameTorrent.id) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
-          await this.ntf.rejectTorrent(this._rss, _client, torrent, '拒绝原因: 跳过同大小种子');
-          return;
-        }
-      }
       let fitRule = {};
       if (fitRules.length > 0) {
         const highestPriority = Math.max(...fitRules.map(rule => +rule.priority));
@@ -348,6 +326,30 @@ class Rss {
       }
       const category = fitRule.category || this.category;
       const client = fitRule.client ? global.runningClient[fitRule.client] : _client;
+      // 在这里检查是否存在相同大小的种子
+      if (this.skipSameTorrent) {
+        // 检查最终选定的客户端中是否有相同大小的种子
+        if (client && client.maindata && client._client.type === 'qBittorrent') {
+          for (const _torrent of client.maindata.torrents) {
+            if (+_torrent.size === +torrent.size) {
+              await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
+              await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 跳过同大小种子');
+              return;
+            }
+          }
+        }
+        
+        // 数据库检查部分，检查最近添加的相同大小种子（5分钟内）
+        const checkTime = 300; // 5分钟
+        const sameTorrent = await util.getRecord('select * from torrents where size = ? and add_time > ?', [torrent.size, moment().unix() - checkTime]);
+        if (sameTorrent && sameTorrent.id) {
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
+          await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 跳过同大小种子');
+          return;
+        }
+      }
       try {
         let truehash = '';
         this.addCount += 1;
