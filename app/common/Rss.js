@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
 const Push = require('./Push');
+const redlock = require('../libs/redlock');
 
 class Rss {
   constructor (rss) {
@@ -52,9 +53,58 @@ class Rss {
     this.maxClientUploadSpeed = util.calSize(rss.maxClientUploadSpeed, rss.maxClientUploadSpeedUnit);
     this.maxClientDownloadSpeed = util.calSize(rss.maxClientDownloadSpeed, rss.maxClientDownloadSpeedUnit);
     this.maxClientDownloadCount = +rss.maxClientDownloadCount;
+    this.isRunning = false;
     if (!rss.dryrun) {
-      this.rssJob = cron.schedule(rss.cron, async () => { try { await this.rss(); } catch (e) { logger.error(this.alias, e); } });
+      this.rssJob = cron.schedule(rss.cron, async () => { 
+        try { 
+          if (this.isRunning) {
+            logger.warn(this.alias, 'RSS任务已在运行中，跳过本次执行');
+            return;
+          }
+          
+          this.isRunning = true;
+          
+          const globalLockKey = `vertex:rss:global:${this.id}`;
+          let lock = null;
+          
+          try {
+            lock = await redlock.lock(globalLockKey, 600000);
+            logger.debug(this.alias, '获取RSS任务全局锁成功');
+            
+            await this.rss(); 
+          } catch (err) {
+            if (err.name === 'LockError') {
+              logger.warn(this.alias, 'RSS任务已被其他进程锁定，跳过本次执行');
+            } else {
+              logger.error(this.alias, '执行RSS任务出错:', err);
+            }
+          } finally {
+            if (lock) {
+              try {
+                await lock.unlock();
+                logger.debug(this.alias, '释放RSS任务全局锁成功');
+              } catch (unlockErr) {
+                logger.error(this.alias, '释放RSS任务全局锁失败:', unlockErr);
+              }
+            }
+            
+            this.isRunning = false;
+          }
+        } catch (e) { 
+          this.isRunning = false;
+          logger.error(this.alias, '启动RSS任务失败:', e); 
+        } 
+      });
       this.clearCount = cron.schedule('0 * * * *', () => { this.addCount = 0; });
+      
+      this.cleanLockJob = cron.schedule('0 */6 * * *', async () => {
+        try {
+          await this.cleanExpiredLocks();
+        } catch (e) {
+          logger.error(this.alias, '清理过期锁任务失败:', e);
+        }
+      });
+      
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
   }
@@ -185,7 +235,56 @@ class Rss {
     delete this.rssJob;
     this.clearCount.stop();
     delete this.clearCount;
+    
+    // 停止清理锁任务
+    if (this.cleanLockJob) {
+      this.cleanLockJob.stop();
+      delete this.cleanLockJob;
+    }
+    
+    // 如果正在运行，尝试释放相关锁
+    if (this.isRunning) {
+      const globalLockKey = `vertex:rss:global:${this.id}`;
+      redis.del(globalLockKey).catch(err => logger.error('清除全局锁失败:', err));
+      this.isRunning = false;
+    }
+    
     delete global.runningRss[this.id];
+  }
+
+  // 清理过期锁方法
+  async cleanExpiredLocks() {
+    try {
+      // 使用redlock时，锁会自动过期，不需要手动清理
+      // 但我们可以检查Redis中是否有遗留的锁资源
+      
+      // 获取所有与此RSS相关的锁键
+      const torrentLockKeys = await redis.keys(`vertex:torrent:lock:*`);
+      const globalLockKey = `vertex:rss:global:${this.id}`;
+      
+      if (torrentLockKeys && torrentLockKeys.length > 0) {
+        logger.info(this.alias, `发现 ${torrentLockKeys.length} 个潜在的种子锁记录`);
+        
+        // redlock使用的锁格式是特殊的，通常以{锁名称}:*格式存在
+        // 我们需要小心处理，避免错误地删除有效锁
+        
+        // 这里我们不直接删除锁，而是记录可能的问题
+        for (const key of torrentLockKeys) {
+          const resourceValues = await redis.keys(`${key}:*`);
+          if (resourceValues && resourceValues.length > 0) {
+            logger.warn(this.alias, `发现可能的遗留锁资源: ${key}, 拥有 ${resourceValues.length} 个资源记录`);
+          }
+        }
+      }
+      
+      // 检查全局RSS锁资源
+      const globalLockResources = await redis.keys(`${globalLockKey}:*`);
+      if (globalLockResources && globalLockResources.length > 0) {
+        logger.warn(this.alias, `发现可能的全局锁遗留资源，拥有 ${globalLockResources.length} 个资源记录`);
+      }
+    } catch (err) {
+      logger.error(this.alias, '检查锁资源失败:', err);
+    }
   }
 
   reloadRssRule () {
@@ -328,26 +427,32 @@ class Rss {
       const client = fitRule.client ? global.runningClient[fitRule.client] : _client;
       // 在这里检查是否存在相同大小的种子
       if (this.skipSameTorrent) {
-        // 检查最终选定的客户端中是否有相同大小的种子
+        // 先检查数据库中是否有相同大小和相同哈希的种子（10分钟内）
+        const checkTime = 600; // 10分钟
+        const sameTorrent = await util.getRecord('SELECT * FROM torrents WHERE (hash = ? OR size = ?) AND add_time > ?', 
+          [torrent.hash, torrent.size, moment().unix() - checkTime]);
+        
+        if (sameTorrent && sameTorrent.id) {
+          const reason = sameTorrent.hash === torrent.hash ? 
+            '拒绝原因: 种子已添加过' : 
+            '拒绝原因: 跳过同大小种子';
+            
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, reason]);
+          await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
+          return;
+        }
+        
+        // 再检查最终选定的客户端中是否有相同大小的种子
         if (client && client.maindata && client._client.type === 'qBittorrent') {
           for (const _torrent of client.maindata.torrents) {
             if (+_torrent.size === +torrent.size) {
               await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
-              await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 跳过同大小种子');
+                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 下载器中已存在同大小种子']);
+              await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 下载器中已存在同大小种子');
               return;
             }
           }
-        }
-        
-        // 数据库检查部分，检查最近添加的相同大小种子（5分钟内）
-        const checkTime = 300; // 5分钟
-        const sameTorrent = await util.getRecord('select * from torrents where size = ? and add_time > ?', [torrent.size, moment().unix() - checkTime]);
-        if (sameTorrent && sameTorrent.id) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 跳过同大小种子']);
-          await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 跳过同大小种子');
-          return;
         }
       }
       try {
@@ -398,7 +503,19 @@ class Rss {
     if (_torrents) {
       torrents = _torrents;
     } else {
+      // 从多个URL获取种子并合并
       torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url)))).flat();
+      
+      // 根据hash去重，防止不同URL源提供相同种子
+      const uniqueTorrents = [];
+      const hashSet = new Set();
+      for (const torrent of torrents) {
+        if (!hashSet.has(torrent.hash)) {
+          hashSet.add(torrent.hash);
+          uniqueTorrents.push(torrent);
+        }
+      }
+      torrents = uniqueTorrents;
     }
     
     // 获取所有可用的下载器
@@ -429,9 +546,13 @@ class Rss {
     
     // 过滤掉已处理和被冻结的种子
     const newTorrents = [];
+    
+    // 过滤种子
     for (const torrent of torrents) {
+      // 检查是否在数据库中已存在
       const sqlRes = await util.getRecord('SELECT * FROM torrents WHERE hash = ? AND rss_id = ?', [torrent.hash, this.id]);
       if (sqlRes && sqlRes.id) continue;
+      // 检查是否被冻结
       if (torrent.name.indexOf('[FROZEN]') !== -1) continue;
       
       // 检查拒绝规则
@@ -715,8 +836,55 @@ class Rss {
       const client = global.runningClient[clientId];
       const clientTorrents = clientAssignments[clientId];
       
+      // 在处理种子前先尝试锁定它们，防止并发处理
       for (const torrent of clientTorrents) {
-        await this._pushTorrent(torrent, client);
+        // 创建一个临时锁，默认锁定5分钟
+        const lockKey = `vertex:torrent:lock:${torrent.hash}`;
+        let torrentLock = null;
+        
+        try {
+          // 尝试获取分布式锁，锁定时间5分钟（300000毫秒）
+          torrentLock = await redlock.lock(lockKey, 300000);
+          logger.debug(this.alias, `获取种子 ${torrent.name} 锁成功`);
+          
+          try {
+            // 再次检查数据库，确保在获取锁的过程中种子没有被添加
+            const torrentExists = await util.getRecord('SELECT id FROM torrents WHERE hash = ? AND rss_id = ?', 
+              [torrent.hash, this.id]);
+              
+            if (torrentExists && torrentExists.id) {
+              logger.info(this.alias, `种子 ${torrent.name} 在锁定过程中已被其他进程处理，跳过`);
+              continue;
+            }
+            
+            // 处理种子
+            await this._pushTorrent(torrent, client);
+          } catch (error) {
+            logger.error(this.alias, `处理种子 ${torrent.name} 时出错:`, error);
+          }
+        } catch (lockErr) {
+          if (lockErr.name === 'LockError') {
+            // 无法获取锁，说明种子可能正在被其他进程处理
+            logger.info(this.alias, `种子 ${torrent.name} 已被其他进程锁定，跳过`);
+            
+            // 记录跳过原因
+            await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+              [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 正在被其他进程处理']);
+          } else {
+            // 其他锁错误
+            logger.error(this.alias, `获取种子 ${torrent.name} 锁时出错:`, lockErr);
+          }
+        } finally {
+          // 释放锁（如果成功获取了）
+          if (torrentLock) {
+            try {
+              await torrentLock.unlock();
+              logger.debug(this.alias, `释放种子 ${torrent.name} 锁成功`);
+            } catch (unlockErr) {
+              logger.error(this.alias, `释放种子 ${torrent.name} 锁失败:`, unlockErr);
+            }
+          }
+        }
       }
     }
     
@@ -779,6 +947,81 @@ class Rss {
       }
     }
     return torrents;
+  }
+
+  /**
+   * 测试锁机制的正确性
+   * @param {string} torrentHash - 可选的种子哈希用于测试种子锁
+   * @return {Object} 测试结果
+   */
+  async testLockMechanism(torrentHash) {
+    const results = {
+      globalLock: { status: 'untested' },
+      torrentLock: { status: 'untested' },
+      redisMethods: {
+        setnx: typeof redis.setnx === 'function',
+        keys: typeof redis.keys === 'function',
+        get: typeof redis.get === 'function',
+        set: typeof redis.set === 'function',
+        del: typeof redis.del === 'function',
+        expire: typeof redis.expire === 'function'
+      },
+      redlockAvailable: typeof redlock === 'object' && typeof redlock.lock === 'function'
+    };
+    
+    // 测试全局锁
+    const globalLockKey = `vertex:rss:global:${this.id}:test`;
+    try {
+      const lock = await redlock.lock(globalLockKey, 5000); // 锁定5秒
+      results.globalLock.status = 'acquired';
+      
+      // 验证锁是否真的起作用
+      try {
+        const secondLock = await redlock.lock(globalLockKey, 1000);
+        await secondLock.unlock();
+        results.globalLock.status = 'failed-double-acquire'; // 不应该能够获取到第二个锁
+      } catch (e) {
+        results.globalLock.status = 'exclusive'; // 正确，无法获取第二个锁
+      }
+      
+      // 释放第一个锁
+      await lock.unlock();
+      results.globalLock.status = 'success';
+    } catch (e) {
+      results.globalLock.error = e.message;
+      results.globalLock.status = 'error';
+    }
+    
+    // 如果提供了种子哈希，测试种子锁
+    if (torrentHash) {
+      const torrentLockKey = `vertex:torrent:lock:${torrentHash}:test`;
+      try {
+        const lock = await redlock.lock(torrentLockKey, 5000);
+        results.torrentLock.status = 'acquired';
+        await lock.unlock();
+        results.torrentLock.status = 'success';
+      } catch (e) {
+        results.torrentLock.error = e.message;
+        results.torrentLock.status = 'error';
+      }
+    }
+    
+    // 检查Redis中可能存在的遗留锁
+    try {
+      const globalLocks = await redis.keys(`vertex:rss:global:*`);
+      const torrentLocks = await redis.keys(`vertex:torrent:lock:*`);
+      
+      results.existingLocks = {
+        globalLocks: globalLocks.length,
+        torrentLocks: torrentLocks.length,
+        globalLocksList: globalLocks,
+        torrentLocksList: torrentLocks
+      };
+    } catch (e) {
+      results.existingLocks = { error: e.message };
+    }
+    
+    return results;
   }
 }
 module.exports = Rss;

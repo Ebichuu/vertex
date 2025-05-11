@@ -19,6 +19,8 @@ exports.get = util.promisify(client.get).bind(client);
 exports.del = util.promisify(client.del).bind(client);
 exports.expire = util.promisify(client.expire).bind(client);
 exports.scan = util.promisify(client.scan).bind(client);
+exports.setnx = util.promisify(client.setnx).bind(client);
+exports.keys = util.promisify(client.keys).bind(client);
 exports.setWithExpire = async function (k, v, ex) {
   if (!ex && +ex !== ex) {
     throw 'illegal expire';
