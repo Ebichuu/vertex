@@ -518,34 +518,8 @@ class Rss {
       torrents = uniqueTorrents;
     }
     
-    // 获取所有可用的下载器
-    const availableClients = this.clientArr
-      .map(item => global.runningClient[item])
-      .filter(item => {
-        return !!item && !!item.status && !!item.maindata &&
-          (!this.maxClientUploadSpeed || this.maxClientUploadSpeed > item.avgUploadSpeed) &&
-          (!this.maxClientDownloadSpeed || this.maxClientDownloadSpeed > item.avgDownloadSpeed) &&
-          (!this.maxClientDownloadCount || this.maxClientDownloadCount > item.maindata.leechingCount);
-      })
-      .filter(item => {
-        return (!item.maxDownloadSpeed || item.maxDownloadSpeed > item.avgDownloadSpeed) &&
-          (!item.maxUploadSpeed || item.maxUploadSpeed > item.avgUploadSpeed) &&
-          (!item.maxLeechNum || item.maxLeechNum > item.maindata.leechingCount) &&
-          (!item.minFreeSpace || item.minFreeSpace < item.maindata.freeSpaceOnDisk);
-      });
-    
-    if (availableClients.length === 0) {
-      logger.error(this.alias, '无可用下载器');
-      for (const torrent of torrents) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 无可用下载器']);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 无可用下载器');
-      }
-      return;
-    }
-    
-    // 过滤掉已处理和被冻结的种子
-    const newTorrents = [];
+    // 过滤掉已处理和被冻结的种子和超过每小时推送上限的种子
+    let newTorrents = [];
     
     // 过滤种子
     for (const torrent of torrents) {
@@ -571,14 +545,74 @@ class Rss {
       newTorrents.push(torrent);
     }
     
-    // 检查每小时推送上限
-    if (this.addCount + newTorrents.length > this.addCountPerHour) {
+    // 如果没有有效种子，直接返回
+    if (newTorrents.length === 0) {
+      this.lastRssTime = moment().unix();
+      return;
+    }
+    
+    // 获取所有可用的下载器
+    const availableClients = this.clientArr
+      .map(item => global.runningClient[item])
+      .filter(item => {
+        return !!item && !!item.status && !!item.maindata &&
+          (!this.maxClientUploadSpeed || this.maxClientUploadSpeed > item.avgUploadSpeed) &&
+          (!this.maxClientDownloadSpeed || this.maxClientDownloadSpeed > item.avgDownloadSpeed) &&
+          (!this.maxClientDownloadCount || this.maxClientDownloadCount > item.maindata.leechingCount);
+      })
+      .filter(item => {
+        return (!item.maxDownloadSpeed || item.maxDownloadSpeed > item.avgDownloadSpeed) &&
+          (!item.maxUploadSpeed || item.maxUploadSpeed > item.avgUploadSpeed) &&
+          (!item.maxLeechNum || item.maxLeechNum > item.maindata.leechingCount) &&
+          (!item.minFreeSpace || item.minFreeSpace < item.maindata.freeSpaceOnDisk);
+      });
+    
+    // 将"无可用下载器"判断移至过滤后，只对需要处理的种子记录错误
+    if (availableClients.length === 0) {
+      logger.error(this.alias, '无可用下载器');
       for (const torrent of newTorrents) {
         await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
+          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 无可用下载器']);
+        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 无可用下载器');
       }
       return;
+    }
+
+    // 检查每小时推送上限
+    if (this.addCount + newTorrents.length > this.addCountPerHour) {
+      // 计算可接受的种子数量和需要拒绝的种子数量
+      const acceptableCount = this.addCountPerHour - this.addCount;
+      
+      // 如果有可接受的种子，则按大小排序，优先处理大种子
+      if (acceptableCount > 0) {
+        // 对种子按大小排序（从大到小）
+        newTorrents.sort((a, b) => +b.size - +a.size);
+        
+        // 分割为可接受的和需要拒绝的
+        const acceptableTorrents = newTorrents.slice(0, acceptableCount);
+        const rejectedTorrents = newTorrents.slice(acceptableCount);
+        
+        // 记录被拒绝的种子
+        for (const torrent of rejectedTorrents) {
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
+          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
+        }
+        
+        // 继续处理可接受的种子
+        logger.info(this.alias, `每小时推送上限为 ${this.addCountPerHour}，当前已推送 ${this.addCount}，本次接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
+        
+        // 更新newTorrents为可接受的种子列表，继续后续处理
+        newTorrents = acceptableTorrents;
+      } else {
+        // 如果没有可接受的种子（已达上限），拒绝所有种子
+        for (const torrent of newTorrents) {
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
+          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
+        }
+        return;
+      }
     }
     
     // 检查最长休眠时间
@@ -588,12 +622,6 @@ class Rss {
           [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 最长休眠时间']);
         await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 最长休眠时间');
       }
-      this.lastRssTime = moment().unix();
-      return;
-    }
-    
-    // 如果没有有效种子，直接返回
-    if (newTorrents.length === 0) {
       this.lastRssTime = moment().unix();
       return;
     }
