@@ -287,6 +287,78 @@ class Rss {
     }
   }
 
+  /**
+   * 将种子信息缓存到Redis中，用于跳过相同种子检查
+   * @param {string} clientId - 下载器ID
+   * @param {object} torrent - 种子信息对象，需包含hash和size
+   * @param {number} expireTime - 缓存过期时间（秒），默认10分钟
+   */
+  async cacheTorrentToClient(clientId, torrent, expireTime = 600) {
+    try {
+      // 基础参数检查
+      if (!clientId || !torrent || !torrent.hash || !torrent.size) {
+        logger.warn(this.alias, `缓存种子参数不完整: clientId=${clientId}, torrent=${JSON.stringify(torrent || {})}`);
+        return;
+      }
+
+      // 缓存种子hash
+      const hashKey = `vertex:client_torrent:${clientId}:hash:${torrent.hash}`;
+      await redis.setWithExpire(hashKey, '1', expireTime);
+      
+      // 缓存种子大小
+      const sizeKey = `vertex:client_torrent:${clientId}:size:${torrent.size}`;
+      await redis.setWithExpire(sizeKey, torrent.hash, expireTime);
+      
+      logger.debug(this.alias, `缓存种子到客户端 ${clientId}, Hash: ${torrent.hash}, Size: ${util.formatSize(torrent.size)}, 名称: ${torrent.name?.substring(0, 30)}..., 过期时间: ${expireTime}秒`);
+    } catch (err) {
+      logger.error(this.alias, `缓存种子到Redis失败: ${err.message}`);
+    }
+  }
+  
+  /**
+   * 检查客户端是否已存在相同的种子（通过hash或size）
+   * @param {string} clientId - 下载器ID
+   * @param {object} torrent - 种子信息对象，需包含hash和size
+   * @return {object|null} - 如果存在返回{exists: true, reason: '原因'}, 否则返回null
+   */
+  async checkTorrentExistsInClient(clientId, torrent) {
+    try {
+      // 基础参数检查
+      if (!clientId || !torrent || !torrent.hash || !torrent.size) {
+        logger.warn(this.alias, `检查客户端种子存在性参数不完整: clientId=${clientId}, torrent=${JSON.stringify(torrent || {})}`);
+        return null;
+      }
+
+      // 检查hash是否存在
+      const hashKey = `vertex:client_torrent:${clientId}:hash:${torrent.hash}`;
+      const hashExists = await redis.get(hashKey);
+      
+      if (hashExists) {
+        return {
+          exists: true,
+          reason: '拒绝原因: 种子已添加过'
+        };
+      }
+      
+      // 检查size是否存在
+      const sizeKey = `vertex:client_torrent:${clientId}:size:${torrent.size}`;
+      const sizeExists = await redis.get(sizeKey);
+      
+      if (sizeExists) {
+        return {
+          exists: true,
+          reason: '拒绝原因: 下载器中已存在同大小种子',
+          existingHash: sizeExists
+        };
+      }
+      
+      return null;
+    } catch (err) {
+      logger.error(this.alias, `检查客户端种子存在性失败: ${err.message}`);
+      return null; // 出错时返回null，允许继续处理
+    }
+  }
+
   reloadRssRule () {
     logger.info('重新载入 Rss 规则', this.alias);
     this.acceptRules = util.listRssRule().filter(item => (this._acceptRules.indexOf(item.id) !== -1)).sort((a, b) => +b.priority - +a.priority);
@@ -427,29 +499,41 @@ class Rss {
       const client = fitRule.client ? global.runningClient[fitRule.client] : _client;
       // 在这里检查是否存在相同大小的种子
       if (this.skipSameTorrent) {
-        // 先检查数据库中是否有相同大小和相同哈希的种子（10分钟内）
+        // 1. 首先检查Redis缓存中是否存在相同种子（按特定客户端）
+        const existCheck = await this.checkTorrentExistsInClient(client.id, torrent);
+        if (existCheck && existCheck.exists) {
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, existCheck.reason]);
+          await this.ntf.rejectTorrent(this._rss, client, torrent, existCheck.reason);
+          return;
+        }
+        
+        // 2. 检查数据库中是否有相同哈希的种子（仅检查哈希完全匹配 - 10分钟内）
         const checkTime = 600; // 10分钟
-        const sameTorrent = await util.getRecord('SELECT * FROM torrents WHERE (hash = ? OR size = ?) AND add_time > ?', 
-          [torrent.hash, torrent.size, moment().unix() - checkTime]);
+        const sameTorrent = await util.getRecord(
+          'SELECT * FROM torrents WHERE hash = ? AND add_time > ? AND record_type = 1', 
+          [torrent.hash, moment().unix() - checkTime]
+        );
         
         if (sameTorrent && sameTorrent.id) {
-          const reason = sameTorrent.hash === torrent.hash ? 
-            '拒绝原因: 种子已添加过' : 
-            '拒绝原因: 跳过同大小种子';
-            
+          const reason = '拒绝原因: 种子已添加过';
           await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
             [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, reason]);
           await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
           return;
         }
         
-        // 再检查最终选定的客户端中是否有相同大小的种子
+        // 3. 作为后备，检查最终选定的客户端中是否有相同大小的种子
         if (client && client.maindata && client._client.type === 'qBittorrent') {
           for (const _torrent of client.maindata.torrents) {
             if (+_torrent.size === +torrent.size) {
+              // 将这个种子也缓存到Redis中，防止下次重复检查
+              await this.cacheTorrentToClient(client.id, _torrent);
+              
+              const reason = '拒绝原因: 下载器中已存在同大小种子';
               await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 下载器中已存在同大小种子']);
-              await this.ntf.rejectTorrent(this._rss, client, torrent, '拒绝原因: 下载器中已存在同大小种子');
+                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, reason]);
+              await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
               return;
             }
           }
@@ -474,6 +558,14 @@ class Rss {
             await client.addTorrent(torrent.url, torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
           }
         }
+        
+        // 将种子添加到Redis缓存，用于跳过相同种子检查
+        await this.cacheTorrentToClient(client.id, torrent);
+        if (truehash && torrent.hash !== truehash) {
+          // 如果有真实hash不同于原始hash，也缓存它
+          await this.cacheTorrentToClient(client.id, { ...torrent, hash: truehash });
+        }
+        
         try {
           await this.ntf.addTorrent(this._rss, client, torrent);
         } catch (e) {
