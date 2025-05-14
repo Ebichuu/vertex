@@ -9,7 +9,6 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
 const Push = require('./Push');
-const redlock = require('../libs/redlock');
 
 class Rss {
   constructor (rss) {
@@ -64,30 +63,12 @@ class Rss {
           
           this.isRunning = true;
           
-          const globalLockKey = `vertex:rss:global:${this.id}`;
-          let lock = null;
-          
           try {
-            lock = await redlock.lock(globalLockKey, 600000);
-            logger.debug(this.alias, '获取RSS任务全局锁成功');
-            
+            logger.debug(this.alias, '开始执行RSS任务');
             await this.rss(); 
           } catch (err) {
-            if (err.name === 'LockError') {
-              logger.warn(this.alias, 'RSS任务已被其他进程锁定，跳过本次执行');
-            } else {
-              logger.error(this.alias, '执行RSS任务出错:', err);
-            }
+            logger.error(this.alias, '执行RSS任务出错:', err);
           } finally {
-            if (lock) {
-              try {
-                await lock.unlock();
-                logger.debug(this.alias, '释放RSS任务全局锁成功');
-              } catch (unlockErr) {
-                logger.error(this.alias, '释放RSS任务全局锁失败:', unlockErr);
-              }
-            }
-            
             this.isRunning = false;
           }
         } catch (e) { 
@@ -96,14 +77,6 @@ class Rss {
         } 
       });
       this.clearCount = cron.schedule('0 * * * *', () => { this.addCount = 0; });
-      
-      this.cleanLockJob = cron.schedule('0 */6 * * *', async () => {
-        try {
-          await this.cleanExpiredLocks();
-        } catch (e) {
-          logger.error(this.alias, '清理过期锁任务失败:', e);
-        }
-      });
       
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
@@ -236,55 +209,10 @@ class Rss {
     this.clearCount.stop();
     delete this.clearCount;
     
-    // 停止清理锁任务
-    if (this.cleanLockJob) {
-      this.cleanLockJob.stop();
-      delete this.cleanLockJob;
-    }
-    
-    // 如果正在运行，尝试释放相关锁
-    if (this.isRunning) {
-      const globalLockKey = `vertex:rss:global:${this.id}`;
-      redis.del(globalLockKey).catch(err => logger.error('清除全局锁失败:', err));
-      this.isRunning = false;
-    }
+    // 设置实例为非运行状态
+    this.isRunning = false;
     
     delete global.runningRss[this.id];
-  }
-
-  // 清理过期锁方法
-  async cleanExpiredLocks() {
-    try {
-      // 使用redlock时，锁会自动过期，不需要手动清理
-      // 但我们可以检查Redis中是否有遗留的锁资源
-      
-      // 获取所有与此RSS相关的锁键
-      const torrentLockKeys = await redis.keys(`vertex:torrent:lock:*`);
-      const globalLockKey = `vertex:rss:global:${this.id}`;
-      
-      if (torrentLockKeys && torrentLockKeys.length > 0) {
-        logger.info(this.alias, `发现 ${torrentLockKeys.length} 个潜在的种子锁记录`);
-        
-        // redlock使用的锁格式是特殊的，通常以{锁名称}:*格式存在
-        // 我们需要小心处理，避免错误地删除有效锁
-        
-        // 这里我们不直接删除锁，而是记录可能的问题
-        for (const key of torrentLockKeys) {
-          const resourceValues = await redis.keys(`${key}:*`);
-          if (resourceValues && resourceValues.length > 0) {
-            logger.warn(this.alias, `发现可能的遗留锁资源: ${key}, 拥有 ${resourceValues.length} 个资源记录`);
-          }
-        }
-      }
-      
-      // 检查全局RSS锁资源
-      const globalLockResources = await redis.keys(`${globalLockKey}:*`);
-      if (globalLockResources && globalLockResources.length > 0) {
-        logger.warn(this.alias, `发现可能的全局锁遗留资源，拥有 ${globalLockResources.length} 个资源记录`);
-      }
-    } catch (err) {
-      logger.error(this.alias, '检查锁资源失败:', err);
-    }
   }
 
   /**
@@ -956,54 +884,12 @@ class Rss {
       const client = global.runningClient[clientId];
       const clientTorrents = clientAssignments[clientId];
       
-      // 在处理种子前先尝试锁定它们，防止并发处理
       for (const torrent of clientTorrents) {
-        // 创建一个临时锁，默认锁定5分钟
-        const lockKey = `vertex:torrent:lock:${torrent.hash}`;
-        let torrentLock = null;
-        
-        try {
-          // 尝试获取分布式锁，锁定时间5分钟（300000毫秒）
-          torrentLock = await redlock.lock(lockKey, 300000);
-          logger.debug(this.alias, `获取种子 ${torrent.name} 锁成功`);
-          
-          try {
-            // 再次检查数据库，确保在获取锁的过程中种子没有被添加
-            const torrentExists = await util.getRecord('SELECT id FROM torrents WHERE hash = ? AND rss_id = ?', 
-              [torrent.hash, this.id]);
-              
-            if (torrentExists && torrentExists.id) {
-              logger.info(this.alias, `种子 ${torrent.name} 在锁定过程中已被其他进程处理，跳过`);
-              continue;
-            }
-            
-            // 处理种子
-            await this._pushTorrent(torrent, client);
-          } catch (error) {
-            logger.error(this.alias, `处理种子 ${torrent.name} 时出错:`, error);
-          }
-        } catch (lockErr) {
-          if (lockErr.name === 'LockError') {
-            // 无法获取锁，说明种子可能正在被其他进程处理
-            logger.info(this.alias, `种子 ${torrent.name} 已被其他进程锁定，跳过`);
-            
-            // 记录跳过原因
-            await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-              [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 正在被其他进程处理']);
-          } else {
-            // 其他锁错误
-            logger.error(this.alias, `获取种子 ${torrent.name} 锁时出错:`, lockErr);
-          }
-        } finally {
-          // 释放锁（如果成功获取了）
-          if (torrentLock) {
-            try {
-              await torrentLock.unlock();
-              logger.debug(this.alias, `释放种子 ${torrent.name} 锁成功`);
-            } catch (unlockErr) {
-              logger.error(this.alias, `释放种子 ${torrent.name} 锁失败:`, unlockErr);
-            }
-          }
+        try {          
+          // 处理种子
+          await this._pushTorrent(torrent, client);
+        } catch (error) {
+          logger.error(this.alias, `处理种子 ${torrent.name} 时出错:`, error);
         }
       }
     }
@@ -1070,75 +956,58 @@ class Rss {
   }
 
   /**
-   * 测试锁机制的正确性
-   * @param {string} torrentHash - 可选的种子哈希用于测试种子锁
+   * 测试Redis缓存机制的正确性
+   * @param {string} clientId - 客户端ID
+   * @param {string} hash - 种子哈希值
+   * @param {number} size - 种子大小
    * @return {Object} 测试结果
    */
-  async testLockMechanism(torrentHash) {
+  async testCacheMechanism(clientId, hash, size) {
     const results = {
-      globalLock: { status: 'untested' },
-      torrentLock: { status: 'untested' },
+      cacheStatus: { status: 'untested' },
       redisMethods: {
-        setnx: typeof redis.setnx === 'function',
         keys: typeof redis.keys === 'function',
         get: typeof redis.get === 'function',
         set: typeof redis.set === 'function',
         del: typeof redis.del === 'function',
-        expire: typeof redis.expire === 'function'
-      },
-      redlockAvailable: typeof redlock === 'object' && typeof redlock.lock === 'function'
+        expire: typeof redis.expire === 'function',
+        setWithExpire: typeof redis.setWithExpire === 'function'
+      }
     };
     
-    // 测试全局锁
-    const globalLockKey = `vertex:rss:global:${this.id}:test`;
+    // 测试Redis缓存
     try {
-      const lock = await redlock.lock(globalLockKey, 5000); // 锁定5秒
-      results.globalLock.status = 'acquired';
+      // 创建测试种子对象
+      const testTorrent = { hash, size, name: '测试种子' };
       
-      // 验证锁是否真的起作用
-      try {
-        const secondLock = await redlock.lock(globalLockKey, 1000);
-        await secondLock.unlock();
-        results.globalLock.status = 'failed-double-acquire'; // 不应该能够获取到第二个锁
-      } catch (e) {
-        results.globalLock.status = 'exclusive'; // 正确，无法获取第二个锁
-      }
+      // 测试缓存写入
+      await this.cacheTorrentToClient(clientId, testTorrent, 60); // 1分钟过期
+      results.cacheStatus.write = 'success';
       
-      // 释放第一个锁
-      await lock.unlock();
-      results.globalLock.status = 'success';
+      // 测试缓存读取 - 通过hash
+      const hashExists = await this.checkTorrentExistsInClient(clientId, testTorrent);
+      results.cacheStatus.readByHash = hashExists && hashExists.exists ? 'success' : 'failed';
+      
+      // 测试缓存读取 - 通过size
+      const sizeExists = await redis.get(`vertex:client_torrent:${clientId}:size:${size}`);
+      results.cacheStatus.readBySize = sizeExists ? 'success' : 'failed';
+      
+      // 测试缓存过期时间
+      const ttlHash = await redis.ttl(`vertex:client_torrent:${clientId}:hash:${hash}`);
+      const ttlSize = await redis.ttl(`vertex:client_torrent:${clientId}:size:${size}`);
+      results.cacheStatus.ttlHash = ttlHash;
+      results.cacheStatus.ttlSize = ttlSize;
+      
+      // 测试缓存删除
+      await redis.del(`vertex:client_torrent:${clientId}:hash:${hash}`);
+      await redis.del(`vertex:client_torrent:${clientId}:size:${size}`);
+      const afterDeleteHash = await redis.get(`vertex:client_torrent:${clientId}:hash:${hash}`);
+      results.cacheStatus.delete = !afterDeleteHash ? 'success' : 'failed';
+      
+      results.cacheStatus.status = 'success';
     } catch (e) {
-      results.globalLock.error = e.message;
-      results.globalLock.status = 'error';
-    }
-    
-    // 如果提供了种子哈希，测试种子锁
-    if (torrentHash) {
-      const torrentLockKey = `vertex:torrent:lock:${torrentHash}:test`;
-      try {
-        const lock = await redlock.lock(torrentLockKey, 5000);
-        results.torrentLock.status = 'acquired';
-        await lock.unlock();
-        results.torrentLock.status = 'success';
-      } catch (e) {
-        results.torrentLock.error = e.message;
-        results.torrentLock.status = 'error';
-      }
-    }
-    
-    // 检查Redis中可能存在的遗留锁
-    try {
-      const globalLocks = await redis.keys(`vertex:rss:global:*`);
-      const torrentLocks = await redis.keys(`vertex:torrent:lock:*`);
-      
-      results.existingLocks = {
-        globalLocks: globalLocks.length,
-        torrentLocks: torrentLocks.length,
-        globalLocksList: globalLocks,
-        torrentLocksList: torrentLocks
-      };
-    } catch (e) {
-      results.existingLocks = { error: e.message };
+      results.cacheStatus.error = e.message;
+      results.cacheStatus.status = 'error';
     }
     
     return results;
