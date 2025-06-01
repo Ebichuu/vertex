@@ -202,6 +202,7 @@ const freeWrapper = {
   'hdhome.org': _free,
   'springsunday.net': _free,
   'hdsky.me': _free,
+  'hdsky.my': _free,
   'ourbits.club': _free,
   'chdbits.co': _free,
   'ptchdbits.co': _free,
