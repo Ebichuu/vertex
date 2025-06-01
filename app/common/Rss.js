@@ -691,8 +691,8 @@ class Rss {
       // 存储介质分类 (HDD/SSD)
       const storageType = {};
       
-      // 识别高带宽客户端 (>5Gbps, 约625MB/s)
-      const highBandwidthThreshold = 625000000;
+      // 识别高带宽客户端 (>=2.5Gbps, 约312.5MB/s)
+      const highBandwidthThreshold = 312500000;
       const highBandwidthClients = [];
       const normalBandwidthClients = [];
       
@@ -725,7 +725,7 @@ class Rss {
          storageType[client.id] = isHDD ? 'HDD' : 'SSD';
         
         // 根据带宽分类
-        if (estimatedRealBandwidth > highBandwidthThreshold) {
+        if (estimatedRealBandwidth >= highBandwidthThreshold) {
           highBandwidthClients.push(client);
         } else {
           normalBandwidthClients.push(client);
@@ -983,50 +983,77 @@ class Rss {
                     `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
       }
     } else if (this.clientSortBy === 'uploadSpeed') {
-      // 专门针对上传速度进行的智能分配 - 优先分配给上传速度低但带宽高的下载器
+      // 专门针对上传速度进行的智能分配 - 优先分配给剩余可用上传速度最大的下载器
       const clientTorrentCount = {};
-      
+      const clientRemainingUploadSpeed = {};
+
       // 初始化客户端分配统计
       availableClients.forEach(client => {
         clientAssignments[client.id] = [];
         clientTorrentCount[client.id] = 0;
+
+        // 计算剩余可用上传速度
+        // 真实带宽 = maxUploadSpeed / 10 (因为用户设置为实际的10倍)
+        const realMaxUploadSpeed = client.maxUploadSpeed ? client.maxUploadSpeed / 10 : 125000000; // 默认1Gbps
+        const currentUploadSpeed = client.maindata.uploadSpeed || 0;
+
+        // 剩余可用上传速度 = 真实最大上传速度 - 当前上传速度
+        clientRemainingUploadSpeed[client.id] = Math.max(0, realMaxUploadSpeed - currentUploadSpeed);
+
+        logger.debug(`下载器: ${client.alias}, ` +
+                    `真实最大上传速度: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
+                    `当前上传速度: ${util.formatSize(currentUploadSpeed)}/s, ` +
+                    `剩余可用上传速度: ${util.formatSize(clientRemainingUploadSpeed[client.id])}/s`);
       });
-      
+
       // 按种子大小从大到小排序，确保大种子优先分配
       newTorrents.sort((a, b) => +b.size - +a.size);
-      
-      // 对于每个种子，都按照"当前上传速度/权重"排序下载器
-      // 这样上传速度低但带宽高的下载器会优先获得种子
+
+      // 对于每个种子，优先分配给剩余可用上传速度最大的下载器
       for (const torrent of newTorrents) {
-        // 按照加权的当前上传速度排序
-        const sortedClients = [...availableClients].sort((a, b) => 
-          (a.maindata.uploadSpeed / clientWeights[a.id]) - 
-          (b.maindata.uploadSpeed / clientWeights[b.id])
-        );
-        
-        // 考虑种子分配数量来平衡负载
-        // 找出分配数量最少的前30%下载器
-        const clientCount = sortedClients.length;
-        const topClients = sortedClients.slice(0, Math.max(1, Math.floor(clientCount * 0.3)));
-        
-        // 在前30%中找当前种子数最少的
-        topClients.sort((a, b) => clientTorrentCount[a.id] - clientTorrentCount[b.id]);
-        
-        // 分配给选中的下载器
-        const selectedClient = topClients[0];
+        // 按剩余可用上传速度从大到小排序，同时考虑负载均衡
+        const sortedClients = [...availableClients].sort((a, b) => {
+          // 主要排序依据：剩余可用上传速度（从大到小）
+          const remainingSpeedDiff = clientRemainingUploadSpeed[b.id] - clientRemainingUploadSpeed[a.id];
+
+          // 如果剩余上传速度相近（差异小于50MB/s），则考虑当前分配的种子数量进行负载均衡
+          if (Math.abs(remainingSpeedDiff) < 50000000) { // 50MB/s
+            return clientTorrentCount[a.id] - clientTorrentCount[b.id];
+          }
+
+          return remainingSpeedDiff;
+        });
+
+        // 选择排序后的第一个客户端（剩余上传速度最大且负载相对较轻）
+        const selectedClient = sortedClients[0];
         clientAssignments[selectedClient.id].push(torrent);
         clientTorrentCount[selectedClient.id]++;
+
+        // 动态更新剩余上传速度（假设每个种子会占用一定的上传带宽）
+        // 这里可以根据种子大小和经验值来估算，暂时使用固定值
+        const estimatedUploadUsage = Math.min(10000000, +torrent.size / 1000); // 最多10MB/s，或种子大小/1000
+        clientRemainingUploadSpeed[selectedClient.id] = Math.max(0,
+          clientRemainingUploadSpeed[selectedClient.id] - estimatedUploadUsage);
+
+        logger.debug(`种子分配: "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) ` +
+                    `分配给下载器 ${selectedClient.alias}, ` +
+                    `预估占用上传: ${util.formatSize(estimatedUploadUsage)}/s, ` +
+                    `更新后剩余上传速度: ${util.formatSize(clientRemainingUploadSpeed[selectedClient.id])}/s`);
       }
-      
+
       // 输出分配统计信息到日志
-      logger.debug(this.alias, '带宽加权上传速度分配结果:');
+      logger.debug(this.alias, '基于剩余可用上传速度的分配结果:');
       for (const clientId in clientTorrentCount) {
         const client = global.runningClient[clientId];
+        const realMaxUploadSpeed = client.maxUploadSpeed ? client.maxUploadSpeed / 10 : 125000000;
+        const currentUploadSpeed = client.maindata.uploadSpeed || 0;
+        const utilizationRate = ((currentUploadSpeed / realMaxUploadSpeed) * 100).toFixed(2);
+
         logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
-                    `当前上传速度: ${util.formatSize(client.maindata.uploadSpeed)}/s, ` +
-                    `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` +
-                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
-                    `加权上传速度: ${util.formatSize(client.maindata.uploadSpeed / clientWeights[clientId])}/s`);
+                    `真实最大上传速度: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
+                    `当前上传速度: ${util.formatSize(currentUploadSpeed)}/s, ` +
+                    `带宽利用率: ${utilizationRate}%, ` +
+                    `最终剩余上传速度: ${util.formatSize(clientRemainingUploadSpeed[clientId])}/s`);
       }
     } else {
       // 其他排序规则，使用带宽权重的轮询分配
