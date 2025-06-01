@@ -180,6 +180,11 @@ export default {
         defaultSortOrder: 'ascend',
         width: 30
       }, {
+        title: '优先级',
+        dataIndex: 'priority',
+        sorter: (a, b) => (a.priority || 0) - (b.priority || 0),
+        width: 20
+      }, {
         title: '下载器',
         dataIndex: 'downloader',
         width: 20
