@@ -182,4 +182,112 @@ const init = function () {
     }
   }
   require('./routes/router.js')(app, express, router);
+  
+  // 添加优雅关闭处理器
+  setupGracefulShutdown();
 })();
+
+// 优雅关闭函数
+function setupGracefulShutdown() {
+  const gracefulShutdown = async (signal) => {
+    logger.info(`收到 ${signal} 信号，开始优雅关闭应用...`);
+    
+    try {
+      // 停止所有定时任务
+      if (global.clearDatabase) {
+        global.clearDatabase.stop();
+        logger.info('数据库清理定时任务已停止');
+      }
+      
+      if (global.cookiecloud) {
+        global.cookiecloud.stop();
+        logger.info('CookieCloud 同步任务已停止');
+      }
+      
+      // 停止所有运行中的组件
+      for (const client of Object.values(global.runningClient || {})) {
+        if (client.destroy) {
+          client.destroy();
+        }
+      }
+      logger.info('所有下载器实例已停止');
+      
+      for (const rss of Object.values(global.runningRss || {})) {
+        if (rss.destroy) {
+          rss.destroy();
+        }
+      }
+      logger.info('所有 RSS 实例已停止');
+      
+      for (const server of Object.values(global.runningServer || {})) {
+        if (server.destroy) {
+          await server.destroy();
+        }
+      }
+      logger.info('所有服务器连接已关闭');
+      
+      for (const site of Object.values(global.runningSite || {})) {
+        if (site.destroy) {
+          site.destroy();
+        }
+      }
+      logger.info('所有站点实例已停止');
+      
+      for (const douban of Object.values(global.runningDouban || {})) {
+        if (douban.destroy) {
+          douban.destroy();
+        }
+      }
+      logger.info('所有豆瓣实例已停止');
+      
+      for (const script of Object.values(global.runningScript || {})) {
+        if (script.destroy) {
+          script.destroy();
+        }
+      }
+      logger.info('所有脚本实例已停止');
+      
+      for (const watch of Object.values(global.runningWatch || {})) {
+        if (watch.destroy) {
+          watch.destroy();
+        }
+      }
+      logger.info('所有监控实例已停止');
+      
+      for (const irc of Object.values(global.runningIRC || {})) {
+        if (irc.destroy) {
+          irc.destroy();
+        }
+      }
+      logger.info('所有 IRC 实例已停止');
+      
+      // 最后关闭数据库连接
+      util.closeDatabase();
+      
+      logger.info('应用已优雅关闭');
+      process.exit(0);
+    } catch (error) {
+      logger.error('优雅关闭过程中发生错误:', error);
+      process.exit(1);
+    }
+  };
+  
+  // 监听各种退出信号
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // Docker stop 命令
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));   // Ctrl+C
+  process.on('SIGQUIT', () => gracefulShutdown('SIGQUIT')); // Quit 信号
+  process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));   // 终端关闭
+  
+  // 处理未捕获的异常和拒绝
+  process.on('uncaughtException', (error) => {
+    logger.error('未捕获的异常:', error);
+    gracefulShutdown('uncaughtException');
+  });
+  
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error('未处理的 Promise 拒绝:', reason);
+    gracefulShutdown('unhandledRejection');
+  });
+  
+  logger.info('优雅关闭处理器已设置');
+}

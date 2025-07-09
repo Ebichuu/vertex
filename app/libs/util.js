@@ -19,6 +19,15 @@ const logger = require('./logger');
 const scrape = require('./scrape');
 
 const db = new Database(path.join(__dirname, '../db/sql.db'));
+
+// 启用 WAL 模式以提高并发性能和数据安全性
+try {
+  db.pragma('journal_mode = WAL');
+  logger.info('SQLite WAL 模式已启用');
+} catch (e) {
+  logger.error('启用 WAL 模式失败:', e);
+}
+
 puppeteer.use(StealthPlugin());
 
 let browser;
@@ -623,4 +632,21 @@ exports.initCookieCloud = function () {
     };
   });
   // init
+};
+
+// 数据库优雅关闭方法
+exports.closeDatabase = function () {
+  try {
+    if (db) {
+      // 在关闭前执行 WAL 检查点，确保所有更改都写入主数据库文件
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      logger.info('SQLite WAL 检查点完成');
+      
+      // 关闭数据库连接
+      db.close();
+      logger.info('数据库连接已安全关闭');
+    }
+  } catch (e) {
+    logger.error('关闭数据库时发生错误:', e);
+  }
 };
