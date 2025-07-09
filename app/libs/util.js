@@ -28,6 +28,39 @@ try {
   logger.error('启用 WAL 模式失败:', e);
 }
 
+// 数据库迁移函数
+const runMigrations = function () {
+  try {
+    // 创建每日统计表
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS daily_stats (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        stats_date TEXT NOT NULL UNIQUE,
+        total_uploaded INTEGER NOT NULL DEFAULT 0,
+        total_downloaded INTEGER NOT NULL DEFAULT 0,
+        add_count INTEGER NOT NULL DEFAULT 0,
+        reject_count INTEGER NOT NULL DEFAULT 0,
+        delete_count INTEGER NOT NULL DEFAULT 0,
+        per_tracker_stats TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    
+    // 创建索引
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_daily_stats_date
+      ON daily_stats (stats_date);
+    `);
+    
+    logger.info('数据库迁移完成');
+  } catch (e) {
+    logger.error('数据库迁移失败:', e);
+  }
+};
+
+// 执行迁移
+runMigrations();
+
 puppeteer.use(StealthPlugin());
 
 let browser;
@@ -632,6 +665,72 @@ exports.initCookieCloud = function () {
     };
   });
   // init
+};
+
+// 每日统计聚合函数
+exports.aggregateDailyStats = async function (targetDate) {
+  const moment = require('moment');
+  try {
+    const date = targetDate || moment().subtract(1, 'day').format('YYYY-MM-DD');
+    const startTime = moment(date).startOf('day').unix();
+    const endTime = moment(date).endOf('day').unix();
+    
+    logger.info(`开始聚合 ${date} 的统计数据`);
+    
+    // 检查是否已经存在该日期的统计数据
+    const existingStats = await exports.getRecord('SELECT * FROM daily_stats WHERE stats_date = ?', [date]);
+    if (existingStats) {
+      logger.info(`${date} 的统计数据已存在，跳过聚合`);
+      return;
+    }
+    
+    // 聚合种子统计数据
+    const uploadDownloadStats = await exports.getRecord(
+      'SELECT sum(upload) as uploaded, sum(download) as downloaded FROM torrents WHERE record_time >= ? AND record_time <= ?',
+      [startTime, endTime]
+    );
+    
+    const addCount = (await exports.getRecord(
+      'SELECT count(*) as count FROM torrents WHERE record_type = 1 AND record_time >= ? AND record_time <= ?',
+      [startTime, endTime]
+    )).count;
+    
+    const rejectCount = (await exports.getRecord(
+      'SELECT count(*) as count FROM torrents WHERE record_type = 2 AND record_time >= ? AND record_time <= ?',
+      [startTime, endTime]
+    )).count;
+    
+    const deleteCount = (await exports.getRecord(
+      'SELECT count(*) as count FROM torrents WHERE delete_time IS NOT NULL AND delete_time >= ? AND delete_time <= ?',
+      [startTime, endTime]
+    )).count;
+    
+    // 聚合每个tracker的统计数据
+    const perTrackerStats = await exports.getRecords(
+      'SELECT sum(upload) as uploaded, sum(download) as downloaded, tracker FROM torrents WHERE tracker IS NOT NULL AND record_time >= ? AND record_time <= ? GROUP BY tracker',
+      [startTime, endTime]
+    );
+    
+    // 插入聚合数据
+    await exports.runRecord(
+      'INSERT INTO daily_stats (stats_date, total_uploaded, total_downloaded, add_count, reject_count, delete_count, per_tracker_stats, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        date,
+        uploadDownloadStats.uploaded || 0,
+        uploadDownloadStats.downloaded || 0,
+        addCount,
+        rejectCount,
+        deleteCount,
+        JSON.stringify(perTrackerStats),
+        moment().unix()
+      ]
+    );
+    
+    logger.info(`${date} 的统计数据聚合完成: 上传=${uploadDownloadStats.uploaded || 0}, 下载=${uploadDownloadStats.downloaded || 0}, 添加=${addCount}, 拒绝=${rejectCount}, 删除=${deleteCount}`);
+  } catch (e) {
+    logger.error('每日统计聚合失败:', e);
+    throw e;
+  }
 };
 
 // 数据库优雅关闭方法

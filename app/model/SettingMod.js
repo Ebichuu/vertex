@@ -118,19 +118,20 @@ class SettingMod {
   };
 
   async getRunInfo () {
-    const { uploaded, downloaded } = (await util.getRecord('select sum(upload) as uploaded, sum(download) as downloaded from torrents'));
-    const addCountToday = (await util.getRecord('select count(*) as addCount from torrents where record_type = 1 and record_time > ?', [moment().startOf('day').unix()])).addCount;
-    const rejectCountToday = (await util.getRecord('select count(*) as rejectCount from torrents where record_type = 2 and record_time > ?', [moment().startOf('day').unix()])).rejectCount;
-    const deleteCountToday = (await util.getRecord('select count(*) as deleteCount from torrents where delete_time is not null and record_time > ?', [moment().startOf('day').unix()])).deleteCount;
-    const addCount = (await util.getRecord('select count(*) as addCount from torrents where record_type = 1')).addCount;
-    const rejectCount = (await util.getRecord('select count(*) as rejectCount from torrents where record_type = 2')).rejectCount;
-    const deleteCount = (await util.getRecord('select count(*) as deleteCount from torrents where delete_time is not null')).deleteCount;
-    const perTracker = (await util.getRecords('select sum(upload) as uploaded, sum(download) as downloaded, tracker from torrents where tracker is not null group by tracker'));
+    const today = moment().format('YYYY-MM-DD');
+    const todayStart = moment().startOf('day').unix();
+    
+    // 获取今日实时统计数据（保持原有逻辑不变）
+    const addCountToday = (await util.getRecord('select count(*) as addCount from torrents where record_type = 1 and record_time > ?', [todayStart])).addCount;
+    const rejectCountToday = (await util.getRecord('select count(*) as rejectCount from torrents where record_type = 2 and record_time > ?', [todayStart])).rejectCount;
+    const deleteCountToday = (await util.getRecord('select count(*) as deleteCount from torrents where delete_time is not null and record_time > ?', [todayStart])).deleteCount;
+    
+    // 获取今日上传下载数据
     const perTrackerTodaySet = {};
     let uploadedToday = 0;
     let downloadedToday = 0;
-    const torrents = await util.getRecords('select a.hash as hash, max(a.upload) - min(a.upload) as upload,  max(a.download) - min(a.download) as download, b.tracker as tracker from torrent_flow a left join torrents b on a.hash = b.hash where a.time >= ? group by a.hash', [moment().startOf('day').unix()]);
-    for (const torrent of torrents) {
+    const todayTorrents = await util.getRecords('select a.hash as hash, max(a.upload) - min(a.upload) as upload,  max(a.download) - min(a.download) as download, b.tracker as tracker from torrent_flow a left join torrents b on a.hash = b.hash where a.time >= ? group by a.hash', [todayStart]);
+    for (const torrent of todayTorrents) {
       uploadedToday += torrent.upload;
       downloadedToday += torrent.download;
       if (!torrent.tracker) {
@@ -146,8 +147,63 @@ class SettingMod {
     for (const tracker of Object.keys(perTrackerTodaySet)) {
       perTrackerToday.push({ tracker, ...perTrackerTodaySet[tracker] });
     }
+    
+    // 获取今日种子上传下载总量（来自torrents表）
+    const todayTorrentsStats = await util.getRecord('select sum(upload) as uploaded, sum(download) as downloaded from torrents where record_time >= ?', [todayStart]);
+    const todayUploadFromTorrents = todayTorrentsStats.uploaded || 0;
+    const todayDownloadFromTorrents = todayTorrentsStats.downloaded || 0;
+    
+    // 获取今日tracker统计（来自torrents表）
+    const todayPerTrackerFromTorrents = await util.getRecords('select sum(upload) as uploaded, sum(download) as downloaded, tracker from torrents where tracker is not null and record_time >= ? group by tracker', [todayStart]);
+    
+    // 获取历史聚合数据（昨天及之前）
+    const historicalStats = await util.getRecord('select sum(total_uploaded) as historicalUploaded, sum(total_downloaded) as historicalDownloaded, sum(add_count) as historicalAddCount, sum(reject_count) as historicalRejectCount, sum(delete_count) as historicalDeleteCount from daily_stats where stats_date < ?', [today]);
+    
+    // 获取历史tracker聚合数据
+    const historicalPerTrackerData = await util.getRecords('select per_tracker_stats from daily_stats where stats_date < ? and per_tracker_stats is not null', [today]);
+    const historicalPerTrackerSet = {};
+    for (const record of historicalPerTrackerData) {
+      try {
+        const trackerStats = JSON.parse(record.per_tracker_stats);
+        for (const stat of trackerStats) {
+          if (!stat.tracker) continue;
+          if (!historicalPerTrackerSet[stat.tracker]) {
+            historicalPerTrackerSet[stat.tracker] = { uploaded: 0, downloaded: 0 };
+          }
+          historicalPerTrackerSet[stat.tracker].uploaded += stat.uploaded || 0;
+          historicalPerTrackerSet[stat.tracker].downloaded += stat.downloaded || 0;
+        }
+      } catch (e) {
+        // 忽略解析错误
+      }
+    }
+    
+    // 合并历史数据和今日数据
+    const uploaded = (historicalStats.historicalUploaded || 0) + todayUploadFromTorrents;
+    const downloaded = (historicalStats.historicalDownloaded || 0) + todayDownloadFromTorrents;
+    const addCount = (historicalStats.historicalAddCount || 0) + addCountToday;
+    const rejectCount = (historicalStats.historicalRejectCount || 0) + rejectCountToday;
+    const deleteCount = (historicalStats.historicalDeleteCount || 0) + deleteCountToday;
+    
+    // 合并tracker统计
+    const perTrackerSet = { ...historicalPerTrackerSet };
+    for (const stat of todayPerTrackerFromTorrents) {
+      if (!stat.tracker) continue;
+      if (!perTrackerSet[stat.tracker]) {
+        perTrackerSet[stat.tracker] = { uploaded: 0, downloaded: 0 };
+      }
+      perTrackerSet[stat.tracker].uploaded += stat.uploaded || 0;
+      perTrackerSet[stat.tracker].downloaded += stat.downloaded || 0;
+    }
+    
+    const perTracker = [];
+    for (const tracker of Object.keys(perTrackerSet)) {
+      perTracker.push({ tracker, ...perTrackerSet[tracker] });
+    }
+    
     const errors = global.ignoreError ? [] : JSON.parse(await redis.get('vertex:error:list') || '[]');
     await redis.set('vertex:error:list', '[]');
+    
     return {
       dashboardContent: global.dashboardContent,
       uploaded: uploaded || 0,

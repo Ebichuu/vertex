@@ -48,6 +48,17 @@ const init = function () {
     }
   });
 
+  // 每日统计聚合定时任务 - 每天凌晨2点执行
+  global.dailyStatsAggregation = cron.schedule('0 2 * * *', async () => {
+    try {
+      logger.info('开始执行每日统计聚合...');
+      await util.aggregateDailyStats();
+      logger.info('每日统计聚合完成');
+    } catch (e) {
+      logger.error('每日统计聚合失败:', e);
+    }
+  });
+
   global.CONFIG = config;
   global.LOGGER = logger;
   global.SITE = sites;
@@ -197,6 +208,11 @@ function setupGracefulShutdown() {
       if (global.clearDatabase) {
         global.clearDatabase.stop();
         logger.info('数据库清理定时任务已停止');
+      }
+      
+      if (global.dailyStatsAggregation) {
+        global.dailyStatsAggregation.stop();
+        logger.info('每日统计聚合定时任务已停止');
       }
       
       if (global.cookiecloud) {
