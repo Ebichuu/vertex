@@ -26,6 +26,7 @@ jobs:
         CI_COMMIT_TIMESTAMP="${{ github.event.head_commit.timestamp }}"
         KEY="${{ secrets.KEY }}"
         PUSH_TIME=$(TZ=Asia/Shanghai date -d $CI_COMMIT_TIMESTAMP "+%Y-%m-%d %H:%M:%S")
+        TIMEVERSION=$(TZ=Asia/Shanghai date -d $CI_COMMIT_TIMESTAMP "+%Y.%m.%d")
         echo "PUSH_TIME=$PUSH_TIME" >> $GITHUB_ENV
         echo "CI_COMMIT_MESSAGE=$CI_COMMIT_MESSAGE" >> $GITHUB_ENV
         echo "CI_COMMIT_BRANCH=$CI_COMMIT_BRANCH" >> $GITHUB_ENV
@@ -33,6 +34,7 @@ jobs:
         echo "IMAGE_TAG_LATEST=lswl/vertex:latest" >> $GITHUB_ENV
         echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
         echo "IMAGE_TAG_BRANCH=lswl/vertex:$CI_COMMIT_BRANCH" >> $GITHUB_ENV
+        echo "IMAGE_TAG_TIMEVERSION=lswl/vertex:$TIMEVERSION" >> $GITHUB_ENV
         echo "PUSH_TIME=$PUSH_TIME" >> $GITHUB_ENV
         echo "KEY=$KEY" >> $GITHUB_ENV
     - name: Push Start Message
@@ -96,6 +98,7 @@ jobs:
       run: |
         docker buildx build --platform linux/amd64,linux/arm64 --cache-from lswl/vertex --tag $IMAGE_TAG_LATEST --build-arg BUILDKIT_INLINE_CACHE=1 . --push
         docker buildx build --platform linux/amd64,linux/arm64 --cache-from lswl/vertex --tag $IMAGE_TAG_BRANCH --build-arg BUILDKIT_INLINE_CACHE=1 . --push
+        docker buildx build --platform linux/amd64,linux/arm64 --cache-from lswl/vertex --tag $IMAGE_TAG_TIMEVERSION --build-arg BUILDKIT_INLINE_CACHE=1 . --push
     - name: Push Finish Message
       run: |
         curl --location --request POST 'https://vertex-push.lswl.workers.dev' \
