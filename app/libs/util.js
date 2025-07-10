@@ -670,12 +670,21 @@ exports.initCookieCloud = function () {
 // 每日统计聚合函数
 exports.aggregateDailyStats = async function (targetDate) {
   const moment = require('moment');
+  
+  // 获取中国时区的moment对象
+  const getMomentCN = (input) => {
+    if (input) {
+      return moment(input).utcOffset(8 * 60); // UTC+8
+    }
+    return moment().utcOffset(8 * 60); // UTC+8
+  };
+  
   try {
-    const date = targetDate || moment().subtract(1, 'day').format('YYYY-MM-DD');
-    const startTime = moment(date).startOf('day').unix();
-    const endTime = moment(date).endOf('day').unix();
+    const date = targetDate || getMomentCN().subtract(1, 'day').format('YYYY-MM-DD');
+    const startTime = getMomentCN(date).startOf('day').unix();
+    const endTime = getMomentCN(date).endOf('day').unix();
     
-    logger.info(`开始聚合 ${date} 的统计数据`);
+    logger.info(`开始聚合 ${date} 的统计数据 (UTC+8 时区)`);
     
     // 检查是否已经存在该日期的统计数据
     const existingStats = await exports.getRecord('SELECT * FROM daily_stats WHERE stats_date = ?', [date]);
@@ -722,11 +731,11 @@ exports.aggregateDailyStats = async function (targetDate) {
         rejectCount,
         deleteCount,
         JSON.stringify(perTrackerStats),
-        moment().unix()
+        getMomentCN().unix()
       ]
     );
     
-    logger.info(`${date} 的统计数据聚合完成: 上传=${uploadDownloadStats.uploaded || 0}, 下载=${uploadDownloadStats.downloaded || 0}, 添加=${addCount}, 拒绝=${rejectCount}, 删除=${deleteCount}`);
+    logger.info(`${date} 的统计数据聚合完成 (UTC+8): 上传=${uploadDownloadStats.uploaded || 0}, 下载=${uploadDownloadStats.downloaded || 0}, 添加=${addCount}, 拒绝=${rejectCount}, 删除=${deleteCount}`);
   } catch (e) {
     logger.error('每日统计聚合失败:', e);
     throw e;

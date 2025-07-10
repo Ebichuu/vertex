@@ -118,8 +118,16 @@ class SettingMod {
   };
 
   async getRunInfo () {
-    const today = moment().format('YYYY-MM-DD');
-    const todayStart = moment().startOf('day').unix();
+    // 获取中国时区的moment对象
+    const getMomentCN = (input) => {
+      if (input) {
+        return moment(input).utcOffset(8 * 60); // UTC+8
+      }
+      return moment().utcOffset(8 * 60); // UTC+8
+    };
+    
+    const today = getMomentCN().format('YYYY-MM-DD');
+    const todayStart = getMomentCN().startOf('day').unix();
     
     // 获取今日实时统计数据（保持原有逻辑不变）
     const addCountToday = (await util.getRecord('select count(*) as addCount from torrents where record_type = 1 and record_time > ?', [todayStart])).addCount;
