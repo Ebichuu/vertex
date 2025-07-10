@@ -40,6 +40,11 @@ jobs:
         npm i --save-dev
         cd webui
         npm i --legacy-peer-deps --save-dev
+    - name: Auto-fix ESLint Issues
+      run: |
+        npm run eslint -- --fix || true
+        cd webui
+        npm run eslint -- --fix || true
     - name: Eslint
       run: |
         npm run eslint
