@@ -46,13 +46,64 @@ const runMigrations = function () {
       );
     `);
     
-    // 创建索引
+    // 创建基础索引
     db.exec(`
       CREATE INDEX IF NOT EXISTS index_daily_stats_date
       ON daily_stats (stats_date);
     `);
     
-    logger.info('数据库迁移完成');
+    // 🚀 性能优化：添加关键索引
+    logger.info('开始创建性能优化索引...');
+    
+    // torrent_flow 表索引 - 用于时间范围查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrent_flow_time
+      ON torrent_flow (time);
+    `);
+    
+    // torrent_flow 表索引 - 用于连接查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrent_flow_hash
+      ON torrent_flow (hash);
+    `);
+    
+    // torrents 表索引 - 用于连接查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrents_hash
+      ON torrents (hash);
+    `);
+    
+    // torrents 表索引 - 用于时间范围查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrents_record_time
+      ON torrents (record_time);
+    `);
+    
+    // 组合索引 - 优化 torrent_flow 的时间+hash 查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrent_flow_time_hash
+      ON torrent_flow (time, hash);
+    `);
+    
+    // torrents 表组合索引 - 优化按类型和时间的查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_torrents_record_type_time
+      ON torrents (record_type, record_time);
+    `);
+    
+    // tracker_flow 表索引 - 用于时间范围查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_tracker_flow_time
+      ON tracker_flow (time);
+    `);
+    
+    // sites 表索引 - 用于时间范围查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS index_sites_update_time
+      ON sites (update_time);
+    `);
+    
+    logger.info('数据库迁移和索引优化完成');
   } catch (e) {
     logger.error('数据库迁移失败:', e);
   }

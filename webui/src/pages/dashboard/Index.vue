@@ -1,6 +1,32 @@
 <template>
   <div class="index">
-    <a-row type="flex" justify="center" align="middle" style="min-height: 100%;">
+    <!-- 🚀 性能优化：添加加载状态显示 -->
+    <div v-if="loading" class="loading-container">
+      <a-spin size="large" tip="正在加载数据...">
+        <div class="loading-content">
+          <div class="loading-steps">
+            <div class="loading-step" :class="{ 'completed': !loadingSteps.runInfo }">
+              <a-icon type="pie-chart" />
+              <span>基础统计</span>
+            </div>
+            <div class="loading-step" :class="{ 'completed': !loadingSteps.downloader }">
+              <a-icon type="download" />
+              <span>下载器</span>
+            </div>
+            <div class="loading-step" :class="{ 'completed': !loadingSteps.server }">
+              <a-icon type="server" />
+              <span>服务器</span>
+            </div>
+            <div class="loading-step" :class="{ 'completed': !loadingSteps.tracker }">
+              <a-icon type="line-chart" />
+              <span>Tracker</span>
+            </div>
+          </div>
+        </div>
+      </a-spin>
+    </div>
+    
+    <a-row v-show="!loading" type="flex" justify="center" align="middle" style="min-height: 100%;">
       <a-col :span="isMobile() ? 24 : 24">
         <div style="margin: 24px auto; text-align: center; max-width: 1440px;">
           <div class="data-rect-1 highlight-1">
@@ -311,7 +337,13 @@ export default {
       trackerInfo: {},
       servers: [],
       downloaders: [],
-      loading: true
+      loading: true,
+      loadingSteps: {
+        runInfo: true,
+        downloader: true,
+        server: true,
+        tracker: true
+      }
     };
   },
   methods: {
@@ -324,15 +356,20 @@ export default {
     },
     async listTrackerHistory () {
       try {
+        this.loadingSteps.tracker = true;
         const res = await this.$api().setting.getTrackerFlowHistory();
         this.trackerInfo = res;
         this.loadTracker();
       } catch (e) {
         await this.$message().error(e.message);
+      } finally {
+        this.loadingSteps.tracker = false;
+        this.checkAllLoaded();
       }
     },
     async getRunInfo () {
       try {
+        this.loadingSteps.runInfo = true;
         const res = await this.$api().setting.getRunInfo();
         this.runInfo = res.data;
         for (const error of this.runInfo.errors.reverse()) {
@@ -349,10 +386,14 @@ export default {
         }
       } catch (e) {
         await this.$message().error(e.message);
+      } finally {
+        this.loadingSteps.runInfo = false;
+        this.checkAllLoaded();
       }
     },
     async listDownloader () {
       try {
+        this.loadingSteps.downloader = true;
         const res = await this.$api().downloader.listMainInfo();
         this.downloaders = res.data
           .sort((a, b) => a.alias.localeCompare(b.alias))
@@ -362,6 +403,9 @@ export default {
           }));
       } catch (e) {
         await this.$message().error(e.message);
+      } finally {
+        this.loadingSteps.downloader = false;
+        this.checkAllLoaded();
       }
     },
     async listDownloaderInfo () {
@@ -382,6 +426,7 @@ export default {
     },
     async listServer () {
       try {
+        this.loadingSteps.server = true;
         const res = await this.$api().server.list();
         this.servers = res.data
           .sort((a, b) => a.alias.localeCompare(b.alias))
@@ -396,6 +441,9 @@ export default {
             }));
       } catch (e) {
         await this.$message().error(e.message);
+      } finally {
+        this.loadingSteps.server = false;
+        this.checkAllLoaded();
       }
     },
     async getNetSpeed () {
@@ -461,32 +509,79 @@ export default {
     },
     async gotoClient (url) {
       window.open(url);
+    },
+    // 🚀 性能优化：检查所有加载状态
+    checkAllLoaded () {
+      const allLoaded = !Object.values(this.loadingSteps).some(step => step);
+      if (allLoaded) {
+        this.loading = false;
+      }
     }
   },
   async mounted () {
-    await this.getRunInfo();
-    const downloader = !!this.runInfo.dashboardContent.filter(item => item === 'downloader')[0];
-    const server = !!this.runInfo.dashboardContent.filter(item => item === 'server')[0];
-    const tracker = !!this.runInfo.dashboardContent.filter(item => item === 'tracker')[0];
-    if (downloader) {
-      this.listDownloader();
-      this.listDownloaderInfo();
-    }
-    if (server) {
-      this.listServer();
-      this.getNetSpeed();
-    }
-    if (tracker) {
-      this.listTrackerHistory();
-    }
-    this.interval = setInterval(() => {
+    // 🚀 性能优化：异步并行加载，提升用户体验
+    this.loading = true;
+    
+    // 首先加载基础信息
+    try {
+      await this.getRunInfo();
+      
+      // 基于配置决定需要加载的组件
+      const downloader = !!this.runInfo.dashboardContent.filter(item => item === 'downloader')[0];
+      const server = !!this.runInfo.dashboardContent.filter(item => item === 'server')[0];
+      const tracker = !!this.runInfo.dashboardContent.filter(item => item === 'tracker')[0];
+      
+      // 如果某些功能未启用，直接标记为已完成
+      if (!downloader) {
+        this.loadingSteps.downloader = false;
+      }
+      if (!server) {
+        this.loadingSteps.server = false;
+      }
+      if (!tracker) {
+        this.loadingSteps.tracker = false;
+      }
+      
+      // 🚀 异步并行加载各个组件
+      const loadPromises = [];
+      
       if (downloader) {
-        this.listDownloaderInfo();
+        loadPromises.push(
+          this.listDownloader().then(() => this.listDownloaderInfo())
+        );
       }
+      
       if (server) {
-        this.getNetSpeed();
+        loadPromises.push(
+          this.listServer().then(() => this.getNetSpeed())
+        );
       }
-    }, 3000);
+      
+      if (tracker) {
+        loadPromises.push(this.listTrackerHistory());
+      }
+      
+      // 等待所有异步加载完成，但不阻塞UI显示
+      Promise.all(loadPromises).then(() => {
+        console.log('🎉 所有组件加载完成');
+      }).catch(error => {
+        console.error('⚠️ 部分组件加载失败:', error);
+      });
+      
+      // 设置定时刷新
+      this.interval = setInterval(() => {
+        if (downloader && this.downloaders.length > 0) {
+          this.listDownloaderInfo();
+        }
+        if (server && this.servers.length > 0) {
+          this.getNetSpeed();
+        }
+      }, 3000);
+      
+    } catch (error) {
+      console.error('💥 主数据加载失败:', error);
+      this.loading = false;
+    }
   },
   beforeUnmount () {
     clearInterval(this.interval);
@@ -580,6 +675,76 @@ export default {
 .torrent-chart {
   height: 320px;
   color: #000
+}
+
+/* 🚀 性能优化：加载状态样式 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 60vh;
+  padding: 40px;
+}
+
+.loading-content {
+  text-align: center;
+  padding: 20px;
+}
+
+.loading-steps {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+  margin-top: 30px;
+  flex-wrap: wrap;
+}
+
+.loading-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px;
+  border-radius: 8px;
+  background: #f5f5f5;
+  min-width: 80px;
+  transition: all 0.3s ease;
+  opacity: 0.6;
+}
+
+.loading-step.completed {
+  background: #e6f7ff;
+  color: #1890ff;
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.loading-step .anticon {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+
+.loading-step span {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .loading-steps {
+    gap: 15px;
+  }
+  
+  .loading-step {
+    min-width: 60px;
+    padding: 10px;
+  }
+  
+  .loading-step .anticon {
+    font-size: 16px;
+  }
+  
+  .loading-step span {
+    font-size: 11px;
+  }
 }
 
 </style>

@@ -12,6 +12,49 @@ const torrentHistorySettingPath = path.join(__dirname, '../data/setting/torrent-
 const torrentMixSettingPath = path.join(__dirname, '../data/setting/torrent-mix-setting.json');
 const torrentPushSettingPath = path.join(__dirname, '../data/setting/torrent-push-setting.json');
 
+// 🚀 性能优化：添加查询缓存
+class QueryCache {
+  constructor() {
+    this.cache = new Map();
+    this.TTL = 30000; // 30秒缓存时间
+  }
+  
+  get(key) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    
+    if (Date.now() - item.timestamp > this.TTL) {
+      this.cache.delete(key);
+      return null;
+    }
+    
+    return item.data;
+  }
+  
+  set(key, data) {
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+    
+    // 清理过期缓存
+    if (this.cache.size > 100) {
+      const now = Date.now();
+      for (const [k, v] of this.cache.entries()) {
+        if (now - v.timestamp > this.TTL) {
+          this.cache.delete(k);
+        }
+      }
+    }
+  }
+  
+  clear() {
+    this.cache.clear();
+  }
+}
+
+const queryCache = new QueryCache();
+
 class SettingMod {
   get () {
     const settingStr = fs.readFileSync(settingPath, { encoding: 'utf-8' });
@@ -118,6 +161,13 @@ class SettingMod {
   };
 
   async getRunInfo () {
+    // 🚀 性能优化：检查缓存
+    const cacheKey = 'runInfo';
+    const cached = queryCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    
     // 获取中国时区的moment对象
     const getMomentCN = (input) => {
       if (input) {
@@ -129,57 +179,114 @@ class SettingMod {
     const today = getMomentCN().format('YYYY-MM-DD');
     const todayStart = getMomentCN().startOf('day').unix();
     
-    // 获取今日实时统计数据（保持原有逻辑不变）
-    const addCountToday = (await util.getRecord('select count(*) as addCount from torrents where record_type = 1 and record_time > ?', [todayStart])).addCount;
-    const rejectCountToday = (await util.getRecord('select count(*) as rejectCount from torrents where record_type = 2 and record_time > ?', [todayStart])).rejectCount;
-    const deleteCountToday = (await util.getRecord('select count(*) as deleteCount from torrents where delete_time is not null and record_time > ?', [todayStart])).deleteCount;
+    // 🚀 性能优化：并行执行基础统计查询
+    const [
+      addCountToday,
+      rejectCountToday, 
+      deleteCountToday,
+      todayTorrentsStats,
+      todayPerTrackerFromTorrents,
+      historicalStats
+    ] = await Promise.all([
+      util.getRecord('select count(*) as addCount from torrents where record_type = 1 and record_time >= ?', [todayStart]),
+      util.getRecord('select count(*) as rejectCount from torrents where record_type = 2 and record_time >= ?', [todayStart]),
+      util.getRecord('select count(*) as deleteCount from torrents where delete_time is not null and delete_time >= ?', [todayStart]),
+      util.getRecord('select sum(upload) as uploaded, sum(download) as downloaded from torrents where record_time >= ?', [todayStart]),
+      util.getRecords('select sum(upload) as uploaded, sum(download) as downloaded, tracker from torrents where tracker is not null and record_time >= ? group by tracker', [todayStart]),
+      util.getRecord('select sum(total_uploaded) as historicalUploaded, sum(total_downloaded) as historicalDownloaded, sum(add_count) as historicalAddCount, sum(reject_count) as historicalRejectCount, sum(delete_count) as historicalDeleteCount from daily_stats where stats_date < ?', [today])
+    ]);
     
-    // 获取今日上传下载数据
-    const perTrackerTodaySet = {};
-    let uploadedToday = 0;
-    let downloadedToday = 0;
-    const todayTorrents = await util.getRecords('select a.hash as hash, max(a.upload) - min(a.upload) as upload,  max(a.download) - min(a.download) as download, b.tracker as tracker from torrent_flow a left join torrents b on a.hash = b.hash where a.time >= ? group by a.hash', [todayStart]);
-    for (const torrent of todayTorrents) {
-      uploadedToday += torrent.upload;
-      downloadedToday += torrent.download;
-      if (!torrent.tracker) {
-        continue;
-      }
-      if (!perTrackerTodaySet[torrent.tracker]) {
-        perTrackerTodaySet[torrent.tracker] = { uploaded: 0, downloaded: 0 };
-      }
-      perTrackerTodaySet[torrent.tracker].uploaded += torrent.upload;
-      perTrackerTodaySet[torrent.tracker].downloaded += torrent.download;
-    }
-    const perTrackerToday = [];
-    for (const tracker of Object.keys(perTrackerTodaySet)) {
-      perTrackerToday.push({ tracker, ...perTrackerTodaySet[tracker] });
-    }
-    
-    // 获取今日种子上传下载总量（来自torrents表）
-    const todayTorrentsStats = await util.getRecord('select sum(upload) as uploaded, sum(download) as downloaded from torrents where record_time >= ?', [todayStart]);
+    // 🚀 性能优化：简化今日上传下载数据获取
+    // 不再使用复杂的 torrent_flow JOIN 查询，直接使用 torrents 表数据
     const todayUploadFromTorrents = todayTorrentsStats.uploaded || 0;
     const todayDownloadFromTorrents = todayTorrentsStats.downloaded || 0;
     
-    // 获取今日tracker统计（来自torrents表）
-    const todayPerTrackerFromTorrents = await util.getRecords('select sum(upload) as uploaded, sum(download) as downloaded, tracker from torrents where tracker is not null and record_time >= ? group by tracker', [todayStart]);
+    // 🚀 性能优化：使用优化的方法获取今日流量数据（基于torrent_flow，但仅在需要时）
+    let uploadedToday = 0;
+    let downloadedToday = 0;
+    const perTrackerTodaySet = {};
     
-    // 获取历史聚合数据（昨天及之前）
-    const historicalStats = await util.getRecord('select sum(total_uploaded) as historicalUploaded, sum(total_downloaded) as historicalDownloaded, sum(add_count) as historicalAddCount, sum(reject_count) as historicalRejectCount, sum(delete_count) as historicalDeleteCount from daily_stats where stats_date < ?', [today]);
+    try {
+      // 使用优化的查询：先获取今日有数据的hash列表，再分批处理
+      const todayHashesResult = await util.getRecord('select count(distinct hash) as hashCount from torrent_flow where time >= ?', [todayStart]);
+      
+      if (todayHashesResult.hashCount > 0 && todayHashesResult.hashCount < 10000) {
+        // 只有在数据量合理的情况下才执行复杂查询
+        const todayTorrents = await util.getRecords(
+          `select tf.hash, 
+                  max(tf.upload) - min(tf.upload) as upload,
+                  max(tf.download) - min(tf.download) as download, 
+                  t.tracker
+           from torrent_flow tf 
+           left join torrents t on tf.hash = t.hash 
+           where tf.time >= ? 
+           group by tf.hash 
+           limit 5000`, 
+          [todayStart]
+        );
+        
+        for (const torrent of todayTorrents) {
+          uploadedToday += torrent.upload || 0;
+          downloadedToday += torrent.download || 0;
+          if (torrent.tracker) {
+            if (!perTrackerTodaySet[torrent.tracker]) {
+              perTrackerTodaySet[torrent.tracker] = { uploaded: 0, downloaded: 0 };
+            }
+            perTrackerTodaySet[torrent.tracker].uploaded += torrent.upload || 0;
+            perTrackerTodaySet[torrent.tracker].downloaded += torrent.download || 0;
+          }
+        }
+      } else {
+        // 数据量过大时，使用简化的统计方法
+        console.log('⚠️ 今日种子数据量较大，使用简化统计方法');
+        uploadedToday = todayUploadFromTorrents;
+        downloadedToday = todayDownloadFromTorrents;
+        
+        // 使用 torrents 表的今日tracker统计作为替代
+        for (const stat of todayPerTrackerFromTorrents) {
+          if (stat.tracker) {
+            perTrackerTodaySet[stat.tracker] = {
+              uploaded: stat.uploaded || 0,
+              downloaded: stat.downloaded || 0
+            };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('🔧 torrent_flow查询失败，使用备用统计方法:', e.message);
+      uploadedToday = todayUploadFromTorrents;
+      downloadedToday = todayDownloadFromTorrents;
+      
+      for (const stat of todayPerTrackerFromTorrents) {
+        if (stat.tracker) {
+          perTrackerTodaySet[stat.tracker] = {
+            uploaded: stat.uploaded || 0,
+            downloaded: stat.downloaded || 0
+          };
+        }
+      }
+    }
     
-    // 获取历史tracker聚合数据
-    const historicalPerTrackerData = await util.getRecords('select per_tracker_stats from daily_stats where stats_date < ? and per_tracker_stats is not null', [today]);
+    const perTrackerToday = Object.keys(perTrackerTodaySet).map(tracker => 
+      ({ tracker, ...perTrackerTodaySet[tracker] })
+    );
+    
+    // 🚀 性能优化：异步获取历史tracker数据，不阻塞主流程
     const historicalPerTrackerSet = {};
+    const historicalPerTrackerData = await util.getRecords('select per_tracker_stats from daily_stats where stats_date < ? and per_tracker_stats is not null and per_tracker_stats != \'[]\' limit 100', [today]);
+    
     for (const record of historicalPerTrackerData) {
       try {
         const trackerStats = JSON.parse(record.per_tracker_stats);
-        for (const stat of trackerStats) {
-          if (!stat.tracker) continue;
-          if (!historicalPerTrackerSet[stat.tracker]) {
-            historicalPerTrackerSet[stat.tracker] = { uploaded: 0, downloaded: 0 };
+        if (Array.isArray(trackerStats)) {
+          for (const stat of trackerStats) {
+            if (!stat.tracker) continue;
+            if (!historicalPerTrackerSet[stat.tracker]) {
+              historicalPerTrackerSet[stat.tracker] = { uploaded: 0, downloaded: 0 };
+            }
+            historicalPerTrackerSet[stat.tracker].uploaded += stat.uploaded || 0;
+            historicalPerTrackerSet[stat.tracker].downloaded += stat.downloaded || 0;
           }
-          historicalPerTrackerSet[stat.tracker].uploaded += stat.uploaded || 0;
-          historicalPerTrackerSet[stat.tracker].downloaded += stat.downloaded || 0;
         }
       } catch (e) {
         // 忽略解析错误
@@ -189,9 +296,9 @@ class SettingMod {
     // 合并历史数据和今日数据
     const uploaded = (historicalStats.historicalUploaded || 0) + todayUploadFromTorrents;
     const downloaded = (historicalStats.historicalDownloaded || 0) + todayDownloadFromTorrents;
-    const addCount = (historicalStats.historicalAddCount || 0) + addCountToday;
-    const rejectCount = (historicalStats.historicalRejectCount || 0) + rejectCountToday;
-    const deleteCount = (historicalStats.historicalDeleteCount || 0) + deleteCountToday;
+    const addCount = (historicalStats.historicalAddCount || 0) + addCountToday.addCount;
+    const rejectCount = (historicalStats.historicalRejectCount || 0) + rejectCountToday.rejectCount;
+    const deleteCount = (historicalStats.historicalDeleteCount || 0) + deleteCountToday.deleteCount;
     
     // 合并tracker统计
     const perTrackerSet = { ...historicalPerTrackerSet };
@@ -204,15 +311,14 @@ class SettingMod {
       perTrackerSet[stat.tracker].downloaded += stat.downloaded || 0;
     }
     
-    const perTracker = [];
-    for (const tracker of Object.keys(perTrackerSet)) {
-      perTracker.push({ tracker, ...perTrackerSet[tracker] });
-    }
+    const perTracker = Object.keys(perTrackerSet).map(tracker => 
+      ({ tracker, ...perTrackerSet[tracker] })
+    );
     
     const errors = global.ignoreError ? [] : JSON.parse(await redis.get('vertex:error:list') || '[]');
     await redis.set('vertex:error:list', '[]');
     
-    return {
+    const result = {
       dashboardContent: global.dashboardContent,
       uploaded: uploaded || 0,
       downloaded: downloaded || 0,
@@ -221,14 +327,19 @@ class SettingMod {
       addCount,
       rejectCount,
       deleteCount,
-      addCountToday,
-      rejectCountToday,
-      deleteCountToday,
+      addCountToday: addCountToday.addCount,
+      rejectCountToday: rejectCountToday.rejectCount,
+      deleteCountToday: deleteCountToday.deleteCount,
       startTime: global.startTime,
       perTracker,
       perTrackerToday,
       errors
     };
+    
+    // 🚀 性能优化：将结果存储到缓存
+    queryCache.set(cacheKey, result);
+    
+    return result;
   };
 
   async backupVertex (options) {
