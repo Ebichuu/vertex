@@ -756,8 +756,7 @@ class Rss {
       const mediumTorrents = [];
       const largeTorrents = [];
       
-      // 2. 估计种子热度（基于发布时间和大小）
-      const currentTime = moment().unix();
+      // 2. 估计种子热度（基于大小）
       const torrentHotness = {};
       
        // 收集种子信息用于智能分配
