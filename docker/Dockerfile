@@ -1,5 +1,5 @@
 FROM lswl/vertex-base:latest
-LABEL maintainer="xwell"
+LABEL maintainer="lswl@lswl.in, xwell@github.com"
 LABEL build_from="https://github.com/xwell/vertex"
 
 ENV TZ=Asia/Shanghai
