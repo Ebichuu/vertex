@@ -280,6 +280,10 @@ module.exports = function (app, express, router) {
   router.get('/setting/getProxy', ctrl.Setting.getProxy);
   router.post('/setting/saveProxy', ctrl.Setting.saveProxy);
   router.post('/setting/clearHistory', ctrl.Setting.clearHistory);
+  router.get('/setting/testDailyStatsTask', ctrl.Setting.testDailyStatsTask);
+  router.get('/setting/getCronStatus', ctrl.Setting.getCronStatus);
+  router.get('/setting/checkMissingDailyStats', ctrl.Setting.checkMissingDailyStats);
+  router.get('/setting/backfillDailyStats', ctrl.Setting.backfillDailyStats);
 
   router.all('/openapi/:apiKey/plex', ctrl.Webhook.plex);
   router.all('/openapi/:apiKey/emby', ctrl.Webhook.emby);

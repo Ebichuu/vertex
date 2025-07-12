@@ -40,12 +40,17 @@ const initPush = function () {
 const init = function () {
   global.clearDatabase = cron.schedule('1 0 * * *', async () => {
     try {
+      logger.info('开始执行数据库清理任务...');
       await util.runRecord('delete from torrent_flow where time < ?', [moment().unix() - 1]);
       await util.runRecord('delete from tracker_flow where time < ?', [moment().unix() - 7 * 24 * 3600]);
       execSync('rm -f /tmp/Vertex-backups-*');
+      logger.info('数据库清理任务完成');
     } catch (e) {
-      logger.error(e);
+      logger.error('数据库清理任务失败:', e);
     }
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai'
   });
 
   // 每日统计聚合定时任务 - 每天凌晨2点执行
@@ -57,7 +62,33 @@ const init = function () {
     } catch (e) {
       logger.error('每日统计聚合失败:', e);
     }
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai'
   });
+
+  // 添加定时任务状态监控
+  logger.info('核心维护定时任务已启动 (中国时区):');
+  logger.info('- 数据库清理任务: 每天凌晨0点1分执行');
+  logger.info('- 每日统计聚合任务: 每天凌晨2点执行');
+  
+  // 添加测试任务状态的辅助函数
+  global.testDailyStatsTask = async () => {
+    try {
+      logger.info('手动测试每日统计聚合任务...');
+      await util.aggregateDailyStats();
+      logger.info('手动测试完成');
+      return true;
+    } catch (e) {
+      logger.error('手动测试失败:', e);
+      return false;
+    }
+  };
+
+  // 在启动时检查定时任务状态
+  logger.info('定时任务状态:');
+  logger.info('- 数据库清理任务:', global.clearDatabase ? '已启动' : '未启动');
+  logger.info('- 每日统计聚合任务:', global.dailyStatsAggregation ? '已启动' : '未启动');
 
   global.CONFIG = config;
   global.LOGGER = logger;

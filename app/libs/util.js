@@ -710,10 +710,15 @@ exports.initCookieCloud = function () {
   const cc = setting.cookiecloud;
   global.cookiecloud = cron.schedule(cc.cron, async () => {
     try {
+      logger.info('开始执行 CookieCloud 同步...');
       await exports.syncCookieCloud(cc);
+      logger.info('CookieCloud 同步完成');
     } catch (e) {
-      logger.error('cookiecloud 同步失败: \n', e);
+      logger.error('CookieCloud 同步失败:', e);
     };
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai'
   });
   // init
 };
@@ -736,6 +741,7 @@ exports.aggregateDailyStats = async function (targetDate) {
     const endTime = getMomentCN(date).endOf('day').unix();
     
     logger.info(`开始聚合 ${date} 的统计数据 (UTC+8 时区)`);
+    logger.info(`时间范围: ${startTime} - ${endTime} (${getMomentCN(startTime * 1000).format('YYYY-MM-DD HH:mm:ss')} - ${getMomentCN(endTime * 1000).format('YYYY-MM-DD HH:mm:ss')})`);
     
     // 检查是否已经存在该日期的统计数据
     const existingStats = await exports.getRecord('SELECT * FROM daily_stats WHERE stats_date = ?', [date]);
@@ -743,6 +749,10 @@ exports.aggregateDailyStats = async function (targetDate) {
       logger.info(`${date} 的统计数据已存在，跳过聚合`);
       return;
     }
+    
+    // 检查是否有数据需要聚合
+    const torrentCount = await exports.getRecord('SELECT count(*) as count FROM torrents WHERE record_time >= ? AND record_time <= ?', [startTime, endTime]);
+    logger.info(`发现 ${torrentCount.count} 条种子记录需要聚合`);
     
     // 聚合种子统计数据
     const uploadDownloadStats = await exports.getRecord(
