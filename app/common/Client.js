@@ -53,9 +53,13 @@ class Client {
     if (client.autoDelete) {
       this.autoDeleteJob = cron.schedule(client.autoDeleteCron, () => this.autoDelete());
       this.fitTime = {};
+      this.probabilisticStats = {}; // 概率统计数据
       for (const rule of this.deleteRules) {
         if (rule.fitTime) {
           this.fitTime[rule.id] = {};
+          if (rule.probabilisticFitTime) {
+            this.probabilisticStats[rule.id] = {};
+          }
           rule.fitTimeJob = cron.schedule('*/5 * * * * *', () => this.flashFitTime(rule));
         }
       }
@@ -82,6 +86,81 @@ class Client {
       sum += item;
     }
     return sum;
+  };
+
+  /**
+   * 更新概率统计数据
+   * @param {string} ruleId 规则ID
+   * @param {string} torrentHash 种子hash
+   * @param {boolean} isFit 是否满足条件
+   * @param {number} currentTime 当前时间戳
+   * @param {Object} rule 删除规则对象
+   */
+  _updateProbabilisticStats (ruleId, torrentHash, isFit, currentTime, rule) {
+    if (!this.probabilisticStats[ruleId]) {
+      this.probabilisticStats[ruleId] = {};
+    }
+    
+    if (!this.probabilisticStats[ruleId][torrentHash]) {
+      this.probabilisticStats[ruleId][torrentHash] = {
+        firstCheckTime: currentTime,
+        checks: [],
+        totalChecks: 0,
+        positiveChecks: 0
+      };
+    }
+    
+    const stats = this.probabilisticStats[ruleId][torrentHash];
+    
+    // 记录检查结果
+    stats.checks.push({
+      timestamp: currentTime,
+      result: isFit
+    });
+    
+    stats.totalChecks++;
+    if (isFit) {
+      stats.positiveChecks++;
+    }
+    
+    // 保持滑动窗口（从规则配置读取窗口大小）
+    const windowSize = rule.probabilisticWindowSize || 60; // 默认1分钟
+    const windowStart = currentTime - windowSize;
+    stats.checks = stats.checks.filter(check => check.timestamp >= windowStart);
+  };
+
+  /**
+   * 检查概率统计是否满足删除条件
+   * @param {string} ruleId 规则ID
+   * @param {string} torrentHash 种子hash
+   * @param {Object} rule 删除规则
+   * @returns {boolean} 是否满足条件
+   */
+  _checkProbabilisticFitTime (ruleId, torrentHash, rule) {
+    const stats = this.probabilisticStats[ruleId] && this.probabilisticStats[ruleId][torrentHash];
+    if (!stats || stats.checks.length === 0) return false;
+    
+    const currentTime = moment().unix();
+    const totalDuration = currentTime - stats.firstCheckTime;
+    
+    // 必须观察足够长的时间
+    if (totalDuration < rule.fitTime) return false;
+    
+    // 从规则配置读取参数
+    const windowSize = rule.probabilisticWindowSize || 60; // 默认1分钟
+    const thresholdRate = rule.probabilisticThreshold || 0.6; // 默认60%
+    const minChecks = rule.probabilisticMinChecks || 6; // 最少检查次数
+    
+    // 计算最近检查的满足率
+    const recentChecks = stats.checks.filter(check => check.timestamp >= currentTime - windowSize);
+    if (recentChecks.length === 0) return false;
+    
+    const recentPositiveRate = recentChecks.filter(check => check.result).length / recentChecks.length;
+    
+    // 多重条件判断
+    return recentChecks.length >= minChecks && 
+           recentPositiveRate >= thresholdRate &&
+           totalDuration >= rule.fitTime;
   };
 
   _fitConditions (_torrent, conditions) {
@@ -164,11 +243,30 @@ class Client {
       }
     }
     if (!fitTimeJob && rule.fitTime) {
-      if (this.fitTime[rule.id][torrent.hash]) {
-        logger.debug('开始时间:', moment(this.fitTime[rule.id][torrent.hash] * 1000 || 0).format('YYYY-MM-DD HH:mm:ss'), '设置持续时间:', rule.fitTime,
-          '删种规则: ', rule.alias, '种子: ', torrent.name);
+      if (rule.probabilisticFitTime) {
+        // 概率统计模式
+        const probabilisticFit = this._checkProbabilisticFitTime(rule.id, torrent.hash, rule);
+        if (probabilisticFit) {
+          const stats = this.probabilisticStats[rule.id] && this.probabilisticStats[rule.id][torrent.hash];
+          if (stats) {
+            const windowSize = rule.probabilisticWindowSize || 60;
+            const recentChecks = stats.checks.filter(check => check.timestamp >= moment().unix() - windowSize);
+            const positiveRate = recentChecks.length > 0 ? 
+              (recentChecks.filter(check => check.result).length / recentChecks.length * 100).toFixed(1) : 0;
+            logger.debug('概率统计模式 - 开始时间:', moment(stats.firstCheckTime * 1000).format('YYYY-MM-DD HH:mm:ss'), 
+              '设置持续时间:', rule.fitTime, '统计窗口:', windowSize + 's', '最近满足率:', positiveRate + '%',
+              '删种规则:', rule.alias, '种子:', torrent.name);
+          }
+        }
+        fit = fit && probabilisticFit;
+      } else {
+        // 传统连续时间模式
+        if (this.fitTime[rule.id][torrent.hash]) {
+          logger.debug('连续时间模式 - 开始时间:', moment(this.fitTime[rule.id][torrent.hash] * 1000 || 0).format('YYYY-MM-DD HH:mm:ss'), 
+            '设置持续时间:', rule.fitTime, '删种规则:', rule.alias, '种子:', torrent.name);
+        }
+        fit = fit && (moment().unix() - this.fitTime[rule.id][torrent.hash] > rule.fitTime);
       }
-      fit = fit && (moment().unix() - this.fitTime[rule.id][torrent.hash] > rule.fitTime);
     }
     return fit;
   };
@@ -217,6 +315,9 @@ class Client {
     for (const rule of this.deleteRules) {
       if (rule.fitTime) {
         this.fitTime[rule.id] = {};
+        if (rule.probabilisticFitTime) {
+          this.probabilisticStats[rule.id] = {};
+        }
         rule.fitTimeJob = cron.schedule('*/5 * * * * *', () => this.flashFitTime(rule));
       }
     }
@@ -517,11 +618,21 @@ class Client {
     this.deleteRuleExecutionId++;
     try {
       const torrents = this.maindata.torrents;
+      const currentTime = moment().unix();
+      
       for (const torrent of torrents) {
-        if (this._fitDeleteRule(rule, torrent, true)) {
-          this.fitTime[rule.id][torrent.hash] = this.fitTime[rule.id][torrent.hash] || moment().unix();
+        const isFit = this._fitDeleteRule(rule, torrent, true);
+        
+        if (rule.probabilisticFitTime) {
+          // 概率统计模式：记录每次检查结果
+          this._updateProbabilisticStats(rule.id, torrent.hash, isFit, currentTime, rule);
         } else {
-          delete this.fitTime[rule.id][torrent.hash];
+          // 传统连续时间模式
+          if (isFit) {
+            this.fitTime[rule.id][torrent.hash] = this.fitTime[rule.id][torrent.hash] || currentTime;
+          } else {
+            delete this.fitTime[rule.id][torrent.hash];
+          }
         }
       }
     } catch (e) {

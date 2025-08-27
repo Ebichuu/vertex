@@ -58,6 +58,32 @@
           <a-input size="small" v-model:value="deleteRule.fitTime"/>
         </a-form-item>
         <a-form-item
+          label="概率统计模式"
+          name="probabilisticFitTime"
+          extra="启用后使用概率统计方式判断持续时间，允许种子状态波动，基于满足条件的概率而非连续时间">
+          <a-checkbox v-model:checked="deleteRule.probabilisticFitTime">概率统计持续时间</a-checkbox>
+        </a-form-item>
+        <template v-if="deleteRule.probabilisticFitTime">
+          <a-form-item
+            label="满足条件阈值"
+            name="probabilisticThreshold"
+            extra="种子满足删种条件的最低比例，范围 0.1-1.0，默认 0.6 表示 60%">
+            <a-input size="small" v-model:value="deleteRule.probabilisticThreshold" placeholder="0.6"/>
+          </a-form-item>
+          <a-form-item
+            label="最少检查次数"
+            name="probabilisticMinChecks"
+            extra="进行删种判断前的最少检查次数，建议设置为 (持续时间/5秒监控间隔)，默认 12次（对应60秒）">
+            <a-input size="small" v-model:value="deleteRule.probabilisticMinChecks" placeholder="12"/>
+          </a-form-item>
+          <a-form-item
+            label="统计窗口大小"
+            name="probabilisticWindowSize"
+            extra="统计满足率的时间窗口大小（秒），建议与持续时间相同，默认 60秒">
+            <a-input size="small" v-model:value="deleteRule.probabilisticWindowSize" placeholder="60"/>
+          </a-form-item>
+        </template>
+        <a-form-item
           label="优先级"
           name="priority"
           extra="优先级越高的规则越先执行, 默认为 0">
@@ -216,6 +242,23 @@
         <a-descriptions-item label="14. 比较类型中的 包含 / 包含于 或 不包含 / 不包含于">
           值部分需以半角逗号 , 为分割符. 如种子分类不包含于 KEEP, KEEP2, KEEP3 三个分类, 则应填写: KEEP,KEEP2,KEEP3
         </a-descriptions-item>
+        <a-descriptions-item label="15. 概率统计模式">
+          适用于价值优先等动态排序删种策略。当种子集合频繁变化时，传统连续时间模式可能因状态重置而无法删种。
+          概率统计模式通过统计时间窗口内满足条件的比例来判断，允许状态波动，提高删种成功率。
+        </a-descriptions-item>
+        <a-descriptions-item label="16. 概率统计参数建议">
+          满足条件阈值：建议0.5-0.8，价值优先场景推荐0.6（60%）<br/>
+          最少检查次数：建议设为 持续时间÷5，确保有足够统计样本<br/>
+          统计窗口大小：建议与持续时间相同，简化配置逻辑
+        </a-descriptions-item>
+        <a-descriptions-item label="17. 三参数统一设置建议">
+          建议删种周期=持续时间=统计窗口，均为5秒的倍数：<br/>
+          • 高速小盘：30秒（响应快，空间紧张）<br/>
+          • 高速大盘：60秒（响应快，空间充裕）<br/>
+          • 低速小盘：45秒（响应中等，空间紧张）<br/>
+          • 低速大盘：120秒（响应慢，空间充裕）<br/>
+          概率统计检查次数相应设为：6、12、9、24次
+        </a-descriptions-item>
       </a-descriptions>
     </div>
   </div>
@@ -370,6 +413,10 @@ export default {
         alias: '',
         type: '',
         priority: 0,
+        probabilisticFitTime: false,
+        probabilisticThreshold: 0.6,
+        probabilisticMinChecks: 6,
+        probabilisticWindowSize: 30,
         code: '(maindata, torrent) => {\n' +
               '  return false;\n' +
               '}'
