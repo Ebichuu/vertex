@@ -233,6 +233,10 @@ class UserMod {
           title: '备份还原',
           path: '/setting/backup',
           icon: ['fas', 'floppy-disk']
+        }, {
+          title: '数据管理',
+          path: '/setting/dataManagement',
+          icon: ['fas', 'database']
         }]
       }, {
         title: '系统信息',

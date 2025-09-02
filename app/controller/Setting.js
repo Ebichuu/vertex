@@ -501,14 +501,41 @@ class Setting {
       };
       
       const today = getMomentCN().format('YYYY-MM-DD');
-      const startDate = getMomentCN().subtract(30, 'days').format('YYYY-MM-DD');
       
-      // 生成最近30天的日期列表（不包括今天）
-      const dateList = [];
-      for (let i = 1; i <= 30; i++) {
-        const date = getMomentCN().subtract(i, 'days').format('YYYY-MM-DD');
-        dateList.push(date);
+      // 查询最老的种子记录时间
+      const oldestTorrent = await util.getRecord('SELECT MIN(record_time) as oldest_time FROM torrents');
+      
+      if (!oldestTorrent || !oldestTorrent.oldest_time) {
+        return res.send({
+          success: true,
+          message: '数据库中没有种子记录',
+          data: {
+            dateRange: { start: today, end: today, totalDays: 0 },
+            existing: { count: 0, dates: [] },
+            missing: { count: 0, dates: [] },
+            summary: { totalDays: 0, existingDays: 0, missingDays: 0, aggregatableDays: 0 }
+          }
+        });
       }
+      
+      // 将最老种子的时间戳转换为日期
+      const oldestDate = getMomentCN(oldestTorrent.oldest_time * 1000).format('YYYY-MM-DD');
+      const startDate = oldestDate;
+      
+      logger.info(`查询范围：从 ${startDate} 到 ${today}（不包括今天）`);
+      
+      // 生成从最老种子记录到今天的所有日期列表（不包括今天）
+      const dateList = [];
+      const startMoment = getMomentCN(startDate);
+      const todayMoment = getMomentCN(today);
+      
+      let currentDate = startMoment.clone();
+      while (currentDate.isBefore(todayMoment)) {
+        dateList.push(currentDate.format('YYYY-MM-DD'));
+        currentDate.add(1, 'day');
+      }
+      
+      logger.info(`需要检查的总天数：${dateList.length} 天`);
       
       // 查询已存在的统计记录
       const existingStats = await util.getRecords(
@@ -589,16 +616,40 @@ class Setting {
       };
       
       const today = getMomentCN().format('YYYY-MM-DD');
-      const startDate = getMomentCN().subtract(30, 'days').format('YYYY-MM-DD');
+      
+      // 查询最老的种子记录时间
+      const oldestTorrent = await util.getRecord('SELECT MIN(record_time) as oldest_time FROM torrents');
+      
+      if (!oldestTorrent || !oldestTorrent.oldest_time) {
+        return res.send({
+          success: true,
+          message: '数据库中没有种子记录，无需补充统计数据',
+          data: {
+            summary: { totalMissingDays: 0, successCount: 0, failCount: 0, skippedCount: 0 },
+            details: [],
+            dateRange: { start: today, end: today, totalDays: 0, existingDays: 0 }
+          }
+        });
+      }
+      
+      // 将最老种子的时间戳转换为日期
+      const oldestDate = getMomentCN(oldestTorrent.oldest_time * 1000).format('YYYY-MM-DD');
+      const startDate = oldestDate;
       
       logger.info(`开始检查并补充 ${startDate} 到 ${today} 的遗漏统计数据...`);
       
-      // 生成最近30天的日期列表（不包括今天）
+      // 生成从最老种子记录到今天的所有日期列表（不包括今天）
       const dateList = [];
-      for (let i = 1; i <= 30; i++) {
-        const date = getMomentCN().subtract(i, 'days').format('YYYY-MM-DD');
-        dateList.push(date);
+      const startMoment = getMomentCN(startDate);
+      const todayMoment = getMomentCN(today);
+      
+      let currentDate = startMoment.clone();
+      while (currentDate.isBefore(todayMoment)) {
+        dateList.push(currentDate.format('YYYY-MM-DD'));
+        currentDate.add(1, 'day');
       }
+      
+      logger.info(`需要补充的总天数范围：${dateList.length} 天`);
       
       // 查询已存在的统计记录
       const existingStats = await util.getRecords(

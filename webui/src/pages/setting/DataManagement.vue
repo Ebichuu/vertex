@@ -44,17 +44,17 @@
             </a-button>
             <a-button @click="checkMissingDailyStats" :loading="loadingStatus.checkMissing">
               <a-icon type="search" />
-              检查遗漏统计
+              检查遗漏统计（全部历史）
             </a-button>
             <a-button type="dashed" @click="backfillDailyStats" :loading="loadingStatus.backfill">
               <a-icon type="sync" />
-              补充遗漏数据
+              补充遗漏数据（全部历史）
             </a-button>
           </div>
           <div v-if="missingStats" class="missing-stats-display">
             <a-alert
               :message="`发现 ${missingStats.missing?.count || 0} 天缺失统计数据`"
-              :description="`统计范围：${missingStats.dateRange?.start} 至 ${missingStats.dateRange?.end}，已存在 ${missingStats.existing?.count || 0} 天数据`"
+              :description="`统计范围：从最老种子记录（${missingStats.dateRange?.start}）至今天（${missingStats.dateRange?.end}），共 ${missingStats.dateRange?.totalDays || 0} 天，已存在 ${missingStats.existing?.count || 0} 天数据`"
               type="info"
               show-icon
             />
@@ -124,13 +124,27 @@
       ok-text="开始清理"
       cancel-text="取消"
     >
-      <p>选择要保留的时间范围，更早的种子记录将被删除：</p>
-      <a-radio-group v-model="keepMonths">
-        <a-radio :value="1">保留最近 1 个月</a-radio>
-        <a-radio :value="2">保留最近 2 个月</a-radio>
-        <a-radio :value="3">保留最近 3 个月</a-radio>
-        <a-radio :value="6">保留最近 6 个月</a-radio>
-        <a-radio :value="12">保留最近 1 年</a-radio>
+      <p style="margin-bottom: 16px; font-weight: 500;">选择要保留的时间范围，更早的种子记录将被删除：</p>
+      <a-radio-group 
+        v-model="keepMonths" 
+        style="width: 100%;"
+        class="clean-torrents-radio-group"
+      >
+        <div class="radio-option" @click="keepMonths = 1">
+          <a-radio :value="1">保留最近 1 个月</a-radio>
+        </div>
+        <div class="radio-option" @click="keepMonths = 2">
+          <a-radio :value="2">保留最近 2 个月</a-radio>
+        </div>
+        <div class="radio-option" @click="keepMonths = 3">
+          <a-radio :value="3">保留最近 3 个月</a-radio>
+        </div>
+        <div class="radio-option" @click="keepMonths = 6">
+          <a-radio :value="6">保留最近 6 个月</a-radio>
+        </div>
+        <div class="radio-option" @click="keepMonths = 12">
+          <a-radio :value="12">保留最近 1 年</a-radio>
+        </div>
       </a-radio-group>
       <a-alert
         style="margin-top: 16px;"
@@ -191,6 +205,14 @@ export default {
         }
       ]
     };
+  },
+  watch: {
+    // 监听保留月份的变化，更新视觉效果
+    keepMonths() {
+      this.$nextTick(() => {
+        this.updateRadioSelection();
+      });
+    }
   },
   methods: {
     async getCronStatus() {
@@ -306,6 +328,23 @@ export default {
 
     showCleanTorrentsModal() {
       this.cleanTorrentsVisible = true;
+      // 延迟处理选中状态，确保DOM已渲染
+      this.$nextTick(() => {
+        this.updateRadioSelection();
+      });
+    },
+
+    // 更新单选框的选中状态视觉效果
+    updateRadioSelection() {
+      const radioOptions = document.querySelectorAll('.radio-option');
+      radioOptions.forEach(option => {
+        const radio = option.querySelector('.ant-radio input');
+        if (radio && radio.checked) {
+          option.classList.add('selected');
+        } else {
+          option.classList.remove('selected');
+        }
+      });
     },
 
     async confirmCleanTorrents() {
@@ -313,8 +352,22 @@ export default {
       try {
         const res = await settingApi.cleanOldTorrents(this.keepMonths);
         if (res.success) {
-          this.$message.success(res.message);
+          // 显示详细的成功信息
+          const deletedCount = res.data?.deletedCount || 0;
+          const keepMonthsText = this.keepMonths === 1 ? '1个月' : 
+                                this.keepMonths === 12 ? '1年' : 
+                                `${this.keepMonths}个月`;
+          
+          this.$message.success({
+            content: `清理完成！已删除 ${deletedCount} 条老旧种子记录，保留了最近 ${keepMonthsText} 的数据`,
+            duration: 6
+          });
+          
+          // 关闭弹窗
           this.cleanTorrentsVisible = false;
+          
+          // 可选：重新获取统计信息
+          this.getCronStatus();
         } else {
           this.$message.error(res.message);
         }
@@ -375,6 +428,43 @@ export default {
 .missing-dates h4 {
   margin-bottom: 8px;
   color: #1890ff;
+}
+
+/* 清理种子记录弹窗样式优化 */
+.clean-torrents-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clean-torrents-radio-group .radio-option {
+  padding: 8px 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  transition: all 0.3s;
+  cursor: pointer;
+}
+
+.clean-torrents-radio-group .radio-option:hover {
+  border-color: #40a9ff;
+  background-color: #f0f8ff;
+}
+
+.clean-torrents-radio-group .radio-option:has(.ant-radio-checked) {
+  border-color: #1890ff;
+  background-color: #e6f7ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+}
+
+/* 兼容性处理：如果浏览器不支持:has，使用JavaScript处理 */
+.clean-torrents-radio-group .radio-option.selected {
+  border-color: #1890ff;
+  background-color: #e6f7ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+}
+
+.clean-torrents-radio-group .ant-radio {
+  margin-right: 8px;
 }
 
 @media (max-width: 768px) {
