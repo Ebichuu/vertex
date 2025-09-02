@@ -109,6 +109,27 @@ const runMigrations = function () {
       ON torrents (tracker, record_time, upload, download);
     `);
     
+    // 🎯 种子历史查询优化索引
+    logger.info('开始创建种子历史查询优化索引...');
+    
+    // 1. 优化record_type + id排序的查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_torrents_record_type_id_desc 
+      ON torrents (record_type, id DESC);
+    `);
+    
+    // 2. 优化rss_id + id排序的查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_torrents_rss_id_id_desc 
+      ON torrents (rss_id, id DESC);
+    `);
+    
+    // 3. 优化record_type + rss_id + id的组合查询
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_torrents_type_rss_id_desc 
+      ON torrents (record_type, rss_id, id DESC);
+    `);
+    
     // tracker_flow 表索引 - 用于时间范围查询 (update: 原表已经有 time 索引)
     // db.exec(`
     //   CREATE INDEX IF NOT EXISTS index_tracker_flow_time

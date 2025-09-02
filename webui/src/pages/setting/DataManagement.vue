@@ -127,24 +127,15 @@
       <p style="margin-bottom: 16px; font-weight: 500;">选择要保留的时间范围，更早的种子记录将被删除：</p>
       <a-radio-group 
         v-model="keepMonths" 
+        name="keepMonths"
         style="width: 100%;"
         class="clean-torrents-radio-group"
       >
-        <div class="radio-option" @click="keepMonths = 1">
-          <a-radio :value="1">保留最近 1 个月</a-radio>
-        </div>
-        <div class="radio-option" @click="keepMonths = 2">
-          <a-radio :value="2">保留最近 2 个月</a-radio>
-        </div>
-        <div class="radio-option" @click="keepMonths = 3">
-          <a-radio :value="3">保留最近 3 个月</a-radio>
-        </div>
-        <div class="radio-option" @click="keepMonths = 6">
-          <a-radio :value="6">保留最近 6 个月</a-radio>
-        </div>
-        <div class="radio-option" @click="keepMonths = 12">
-          <a-radio :value="12">保留最近 1 年</a-radio>
-        </div>
+        <a-radio :value="1" class="radio-option">保留最近 1 个月</a-radio>
+        <a-radio :value="2" class="radio-option">保留最近 2 个月</a-radio>
+        <a-radio :value="3" class="radio-option">保留最近 3 个月</a-radio>
+        <a-radio :value="6" class="radio-option">保留最近 6 个月</a-radio>
+        <a-radio :value="12" class="radio-option">保留最近 1 年</a-radio>
       </a-radio-group>
       <a-alert
         style="margin-top: 16px;"
@@ -206,14 +197,7 @@ export default {
       ]
     };
   },
-  watch: {
-    // 监听保留月份的变化，更新视觉效果
-    keepMonths() {
-      this.$nextTick(() => {
-        this.updateRadioSelection();
-      });
-    }
-  },
+
   methods: {
     async getCronStatus() {
       this.loadingStatus.cronStatus = true;
@@ -328,23 +312,6 @@ export default {
 
     showCleanTorrentsModal() {
       this.cleanTorrentsVisible = true;
-      // 延迟处理选中状态，确保DOM已渲染
-      this.$nextTick(() => {
-        this.updateRadioSelection();
-      });
-    },
-
-    // 更新单选框的选中状态视觉效果
-    updateRadioSelection() {
-      const radioOptions = document.querySelectorAll('.radio-option');
-      radioOptions.forEach(option => {
-        const radio = option.querySelector('.ant-radio input');
-        if (radio && radio.checked) {
-          option.classList.add('selected');
-        } else {
-          option.classList.remove('selected');
-        }
-      });
     },
 
     async confirmCleanTorrents() {
@@ -352,12 +319,22 @@ export default {
       try {
         const res = await settingApi.cleanOldTorrents(this.keepMonths);
         if (res.success) {
-          // 显示详细的成功信息
-          const deletedCount = res.data?.deletedCount || 0;
+          // 从响应中获取删除的记录数，优先使用 message 中的数字
+          let deletedCount = 0;
+          
+          // 从 message 中解析数字
+          const messageMatch = res.message?.match(/已删除\s*(\d+)\s*条/);
+          if (messageMatch) {
+            deletedCount = parseInt(messageMatch[1], 10);
+          } else if (res.data?.deletedCount !== undefined) {
+            deletedCount = res.data.deletedCount;
+          }
+          
           const keepMonthsText = this.keepMonths === 1 ? '1个月' : 
                                 this.keepMonths === 12 ? '1年' : 
                                 `${this.keepMonths}个月`;
           
+          // 显示成功消息
           this.$message.success({
             content: `清理完成！已删除 ${deletedCount} 条老旧种子记录，保留了最近 ${keepMonthsText} 的数据`,
             duration: 6
@@ -366,12 +343,13 @@ export default {
           // 关闭弹窗
           this.cleanTorrentsVisible = false;
           
-          // 可选：重新获取统计信息
+          // 重新获取统计信息
           this.getCronStatus();
         } else {
-          this.$message.error(res.message);
+          this.$message.error(res.message || '清理失败');
         }
       } catch (error) {
+        console.error('清理老旧种子记录失败:', error);
         this.$message.error('清理失败: ' + error.message);
       } finally {
         this.loadingStatus.cleanTorrents = false;
@@ -430,30 +408,57 @@ export default {
   color: #1890ff;
 }
 
-/* 清理种子记录弹窗样式优化 */
+/* 清理种子记录弹窗样式优化 - 参考主题选择框 */
 .clean-torrents-radio-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
 }
 
 .clean-torrents-radio-group .radio-option {
-  padding: 8px 12px;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 12px 16px;
   border: 1px solid #d9d9d9;
   border-radius: 6px;
-  transition: all 0.3s;
+  background-color: #ffffff;
+  transition: all 0.3s ease;
   cursor: pointer;
+  position: relative;
 }
 
 .clean-torrents-radio-group .radio-option:hover {
   border-color: #40a9ff;
   background-color: #f0f8ff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(64, 169, 255, 0.15);
+}
+
+.clean-torrents-radio-group .radio-option .ant-radio-wrapper {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  font-weight: 500;
+}
+
+.clean-torrents-radio-group .radio-option .ant-radio {
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+/* 选中状态样式 */
+.clean-torrents-radio-group .radio-option .ant-radio-wrapper-checked,
+.clean-torrents-radio-group .radio-option:has(.ant-radio-checked) {
+  color: #1890ff;
 }
 
 .clean-torrents-radio-group .radio-option:has(.ant-radio-checked) {
   border-color: #1890ff;
   background-color: #e6f7ff;
   box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+  transform: translateY(-1px);
 }
 
 /* 兼容性处理：如果浏览器不支持:has，使用JavaScript处理 */
@@ -461,10 +466,21 @@ export default {
   border-color: #1890ff;
   background-color: #e6f7ff;
   box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+  transform: translateY(-1px);
 }
 
-.clean-torrents-radio-group .ant-radio {
-  margin-right: 8px;
+.clean-torrents-radio-group .radio-option.selected .ant-radio-wrapper {
+  color: #1890ff;
+}
+
+/* 聚焦状态 */
+.clean-torrents-radio-group .radio-option .ant-radio-input:focus {
+  outline: none;
+}
+
+.clean-torrents-radio-group .radio-option .ant-radio-input:focus + .ant-radio-inner {
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
 }
 
 @media (max-width: 768px) {
