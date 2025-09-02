@@ -55,23 +55,23 @@ const runMigrations = function () {
     // 🚀 性能优化：添加关键索引
     logger.info('开始创建性能优化索引...');
     
-    // torrent_flow 表索引 - 用于时间范围查询
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS index_torrent_flow_time
-      ON torrent_flow (time);
-    `);
+    // torrent_flow 表索引 - 用于时间范围查询（update: 原表已经有 time, hash 索引）
+    // db.exec(`
+    //   CREATE INDEX IF NOT EXISTS index_torrent_flow_time
+    //   ON torrent_flow (time);
+    // `);
     
-    // torrent_flow 表索引 - 用于连接查询
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS index_torrent_flow_hash
-      ON torrent_flow (hash);
-    `);
+    // // torrent_flow 表索引 - 用于连接查询
+    // db.exec(`
+    //   CREATE INDEX IF NOT EXISTS index_torrent_flow_hash
+    //   ON torrent_flow (hash);
+    // `);
     
-    // torrents 表索引 - 用于连接查询
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS index_torrents_hash
-      ON torrents (hash);
-    `);
+    // torrents 表索引 - 用于连接查询 (update: 原表已经有 hash 索引)
+    // db.exec(`
+    //   CREATE INDEX IF NOT EXISTS index_torrents_hash
+    //   ON torrents (hash);
+    // `);
     
     // torrents 表索引 - 用于时间范围查询
     db.exec(`
@@ -91,11 +91,29 @@ const runMigrations = function () {
       ON torrents (record_type, record_time);
     `);
     
-    // tracker_flow 表索引 - 用于时间范围查询
+    // 追加索引 - 覆盖查询以优化 sum(upload)/sum(download) 等聚合
     db.exec(`
-      CREATE INDEX IF NOT EXISTS index_tracker_flow_time
-      ON tracker_flow (time);
+      CREATE INDEX IF NOT EXISTS idx_torrents_record_time_covering
+      ON torrents (record_time, upload, download);
     `);
+    
+    // 追加索引 - 提升按 delete_time 的条件过滤
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_torrents_delete_time
+      ON torrents (delete_time);
+    `);
+    
+    // 追加索引 - tracker + 时间范围查询，并覆盖 upload/download 聚合
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_torrents_tracker_time_covering
+      ON torrents (tracker, record_time, upload, download);
+    `);
+    
+    // tracker_flow 表索引 - 用于时间范围查询 (update: 原表已经有 time 索引)
+    // db.exec(`
+    //   CREATE INDEX IF NOT EXISTS index_tracker_flow_time
+    //   ON tracker_flow (time);
+    // `);
     
     // sites 表索引 - 用于时间范围查询
     db.exec(`
