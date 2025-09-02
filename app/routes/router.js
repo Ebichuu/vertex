@@ -284,6 +284,8 @@ module.exports = function (app, express, router) {
   router.get('/setting/getCronStatus', ctrl.Setting.getCronStatus);
   router.get('/setting/checkMissingDailyStats', ctrl.Setting.checkMissingDailyStats);
   router.get('/setting/backfillDailyStats', ctrl.Setting.backfillDailyStats);
+  router.post('/setting/cleanExpiredFlowData', ctrl.Setting.cleanExpiredFlowData);
+  router.post('/setting/cleanOldTorrents', ctrl.Setting.cleanOldTorrents);
 
   router.all('/openapi/:apiKey/plex', ctrl.Webhook.plex);
   router.all('/openapi/:apiKey/emby', ctrl.Webhook.emby);

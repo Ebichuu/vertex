@@ -710,5 +710,72 @@ class Setting {
       });
     }
   }
+
+  // 手动清理过期流量数据
+  async cleanExpiredFlowData (req, res) {
+    try {
+      const util = require('../libs/util');
+      const moment = require('moment');
+      
+      // 清理超过1天的 torrent_flow 数据
+      const torrentFlowResult = await util.runRecord('DELETE FROM torrent_flow WHERE time < ?', [moment().unix() - 24 * 3600]);
+      
+      // 清理超过7天的 tracker_flow 数据
+      const trackerFlowResult = await util.runRecord('DELETE FROM tracker_flow WHERE time < ?', [moment().unix() - 7 * 24 * 3600]);
+      
+      logger.info(`清理过期数据完成 - torrent_flow: ${torrentFlowResult.changes} 条, tracker_flow: ${trackerFlowResult.changes} 条`);
+      
+      res.send({
+        success: true,
+        message: `清理完成，已删除 ${torrentFlowResult.changes + trackerFlowResult.changes} 条过期数据`,
+        data: {
+          torrentFlowDeleted: torrentFlowResult.changes,
+          trackerFlowDeleted: trackerFlowResult.changes
+        }
+      });
+    } catch (e) {
+      logger.error('清理过期数据失败:', e);
+      res.send({
+        success: false,
+        message: e.message
+      });
+    }
+  }
+
+  // 清理老旧种子记录
+  async cleanOldTorrents (req, res) {
+    try {
+      const util = require('../libs/util');
+      const moment = require('moment');
+      const { keepMonths = 3 } = req.body;
+      
+      // 计算保留期限的时间戳
+      const cutoffTime = moment().subtract(keepMonths, 'months').unix();
+      const cutoffDate = moment(cutoffTime * 1000).format('YYYY-MM-DD HH:mm:ss');
+      
+      logger.info(`开始清理 ${cutoffDate} 之前的种子记录 (保留最近 ${keepMonths} 个月)`);
+      
+      // 删除老旧种子记录
+      const result = await util.runRecord('DELETE FROM torrents WHERE record_time < ?', [cutoffTime]);
+      
+      logger.info(`清理老旧种子记录完成，已删除 ${result.changes} 条记录`);
+      
+      res.send({
+        success: true,
+        message: `清理完成，已删除 ${result.changes} 条老旧种子记录`,
+        data: {
+          deletedCount: result.changes,
+          cutoffDate: cutoffDate,
+          keepMonths: keepMonths
+        }
+      });
+    } catch (e) {
+      logger.error('清理老旧种子记录失败:', e);
+      res.send({
+        success: false,
+        message: e.message
+      });
+    }
+  }
 }
 module.exports = Setting;

@@ -52,5 +52,29 @@ export default {
   clearHistory: async () => {
     const url = '/api/setting/clearHistory';
     return await post(url, {});
+  },
+  testDailyStatsTask: async () => {
+    const url = '/api/setting/testDailyStatsTask';
+    return await get(url);
+  },
+  getCronStatus: async () => {
+    const url = '/api/setting/getCronStatus';
+    return await get(url);
+  },
+  checkMissingDailyStats: async () => {
+    const url = '/api/setting/checkMissingDailyStats';
+    return await get(url);
+  },
+  backfillDailyStats: async () => {
+    const url = '/api/setting/backfillDailyStats';
+    return await get(url);
+  },
+  cleanExpiredFlowData: async () => {
+    const url = '/api/setting/cleanExpiredFlowData';
+    return await post(url, {});
+  },
+  cleanOldTorrents: async (keepMonths) => {
+    const url = '/api/setting/cleanOldTorrents';
+    return await post(url, { keepMonths });
   }
 };

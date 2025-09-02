@@ -437,6 +437,7 @@ class SettingMod {
     await util.runRecord('delete from torrents;');
     await util.runRecord('delete from tracker_flow;');
     await util.runRecord('delete from vnstat;');
+    await util.runRecord('delete from daily_stats;');
     return '删除成功';
   };
 }

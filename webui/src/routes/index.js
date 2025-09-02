@@ -51,6 +51,7 @@ import SettingInteraction from '@/pages/setting/Interaction';
 import SettingMenu from '@/pages/setting/Menu';
 import SettingBackup from '@/pages/setting/Backup';
 import SettingCookieCloud from '@/pages/setting/CookieCloud';
+import SettingDataManagement from '@/pages/setting/DataManagement';
 
 import SubscribeList from '@/pages/subscribe/List';
 import SubscribeDetail from '@/pages/subscribe/Detail';
@@ -261,6 +262,12 @@ const setting = {
       component: SettingBackup,
       meta: {
         title: '备份还原 - 系统设置'
+      }
+    }, {
+      path: 'dataManagement',
+      component: SettingDataManagement,
+      meta: {
+        title: '数据管理 - 系统设置'
       }
     }
   ]
