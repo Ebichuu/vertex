@@ -124,7 +124,7 @@ class Client {
     }
     
     // 保持滑动窗口（从规则配置读取窗口大小）
-    const windowSize = rule.probabilisticWindowSize || 60; // 默认1分钟
+    const windowSize = +(rule.probabilisticWindowSize) || 60; // 默认1分钟
     const windowStart = currentTime - windowSize;
     stats.checks = stats.checks.filter(check => check.timestamp >= windowStart);
   };
@@ -143,13 +143,14 @@ class Client {
     const currentTime = moment().unix();
     const totalDuration = currentTime - stats.firstCheckTime;
     
-    // 必须观察足够长的时间
-    if (totalDuration < rule.fitTime) return false;
+    // 确保参数类型转换
+    const fitTime = +(rule.fitTime) || 60;
+    const windowSize = +(rule.probabilisticWindowSize) || 60;
+    const thresholdRate = +(rule.probabilisticThreshold) || 0.6;
+    const minChecks = +(rule.probabilisticMinChecks) || 6;
     
-    // 从规则配置读取参数
-    const windowSize = rule.probabilisticWindowSize || 60; // 默认1分钟
-    const thresholdRate = rule.probabilisticThreshold || 0.6; // 默认60%
-    const minChecks = rule.probabilisticMinChecks || 6; // 最少检查次数
+    // 必须观察足够长的时间
+    if (totalDuration < fitTime) return false;
     
     // 计算最近检查的满足率
     const recentChecks = stats.checks.filter(check => check.timestamp >= currentTime - windowSize);
@@ -157,10 +158,15 @@ class Client {
     
     const recentPositiveRate = recentChecks.filter(check => check.result).length / recentChecks.length;
     
+    // 调试日志
+    logger.debug(`概率统计检查 - 规则:${rule.alias}, 种子:${torrentHash.substr(0,8)}, 
+      持续时间:${totalDuration}/${fitTime}s, 检查次数:${recentChecks.length}/${minChecks}, 
+      满足率:${(recentPositiveRate*100).toFixed(1)}%/${(thresholdRate*100).toFixed(1)}%`);
+    
     // 多重条件判断
     return recentChecks.length >= minChecks && 
            recentPositiveRate >= thresholdRate &&
-           totalDuration >= rule.fitTime;
+           totalDuration >= fitTime;
   };
 
   _fitConditions (_torrent, conditions) {
@@ -249,7 +255,7 @@ class Client {
         if (probabilisticFit) {
           const stats = this.probabilisticStats[rule.id] && this.probabilisticStats[rule.id][torrent.hash];
           if (stats) {
-            const windowSize = rule.probabilisticWindowSize || 60;
+            const windowSize = +(rule.probabilisticWindowSize) || 60;
             const recentChecks = stats.checks.filter(check => check.timestamp >= moment().unix() - windowSize);
             const positiveRate = recentChecks.length > 0 ? 
               (recentChecks.filter(check => check.result).length / recentChecks.length * 100).toFixed(1) : 0;
