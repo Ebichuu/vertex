@@ -1,6 +1,5 @@
 const { TaskQueue } = require('../redis');
 const logger = require('../logger');
-const moment = require('moment');
 
 class ClientTaskQueue extends TaskQueue {
   constructor() {
