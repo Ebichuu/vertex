@@ -42,10 +42,11 @@ class RssTaskQueue extends TaskQueue {
     } catch (error) {
       logger.error(`RSS任务执行失败: ${rssId}`, error);
       
-      // 重试逻辑
+      // 重试逻辑由基类TaskQueue处理
       if (!await this.retryTask(task)) {
-        logger.error(`RSS任务达到最大重试次数，放弃: ${rssId}`);
+        logger.error(`RSS任务达到最大重试次数，已发送到死信队列: ${rssId}, 动作: ${action}`);
       }
+      
       throw error;
     }
   }

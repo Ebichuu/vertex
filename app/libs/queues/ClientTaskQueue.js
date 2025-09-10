@@ -54,9 +54,16 @@ class ClientTaskQueue extends TaskQueue {
     } catch (error) {
       logger.error(`客户端任务执行失败: ${clientId}, 动作: ${task.data.action}`, error);
       
-      // 重试逻辑
-      if (task.retries < this.maxRetries) {
-        await this.retryTask(task);
+      // 重试逻辑由基类TaskQueue处理
+      if (!await this.retryTask(task)) {
+        logger.error(`客户端任务达到最大重试次数，已发送到死信队列: ${clientId}, 动作: ${task.data.action}`);
+        
+        // 标记客户端状态
+        const client = global.runningClient[clientId];
+        if (client) {
+          client.errorCount++;
+          client.status = false;
+        }
       }
       
       throw error;

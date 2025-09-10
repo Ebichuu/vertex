@@ -105,12 +105,14 @@ const init = function () {
         
         if (global.clientTaskQueue) {
           const clientStatus = await global.clientTaskQueue.getQueueStatus();
-          logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者`);
+          const clientDLQ = await global.clientTaskQueue.getDeadLetterQueueStatus();
+          logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者, 死信队列: ${clientDLQ.deadLetterCount}`);
         }
         
         if (global.rssTaskQueue) {
           const rssStatus = await global.rssTaskQueue.getQueueStatus();
-          logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者`);
+          const rssDLQ = await global.rssTaskQueue.getDeadLetterQueueStatus();
+          logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者, 死信队列: ${rssDLQ.deadLetterCount}`);
         }
         logger.info(`=====================`);
       }
