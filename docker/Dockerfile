@@ -8,12 +8,8 @@ RUN \
   git clone https://github.com/xwell/vertex.git /app/vertex && \
   cd /app/vertex && \
   git checkout COMMIT_ID && \
-  cd webui && \
-  npm install && \
-  npm run build && \
-  cd .. && \
   rm .git webui -rf && \
-  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm install --production && \
+  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm i --save && \
   mkdir /vertex && \
   ln -s /vertex/data /app/vertex/app/data && \
   ln -s /vertex/db /app/vertex/app/db && \
@@ -27,7 +23,7 @@ RUN \
   apk del gcc g++ python3 git cmake make npm libc-dev && \
   echo 'bind 127.0.0.1' >> /app/redis.conf && \
   echo 'daemonize yes' >> /app/redis.conf
-# 静态文件已由webui构建生成，无需额外复制
+COPY src/static /app/vertex/app/static
 RUN \
   useradd -d /app/vertex -s /bin/sh vt && \
   chown -R vt /vertex && \
