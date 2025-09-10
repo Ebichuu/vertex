@@ -343,6 +343,24 @@ exports.getMaindata = async function (clientUrl, cookie) {
     }
   };
   let res = await util.requestPromise(option);
+  
+  // 检查响应是否需要重新登录
+  if (res.statusCode === 403 || (res.body && res.body.startsWith('Forbidden'))) {
+    return 'Unauthorized';
+  }
+  
+  // 检查响应是否为有效JSON
+  if (!res.body) {
+    throw new Error('Empty response from qBittorrent API');
+  }
+  
+  let parsedResponse;
+  try {
+    parsedResponse = JSON.parse(res.body);
+  } catch (error) {
+    throw new Error(`Invalid JSON response from qBittorrent: ${res.body.substring(0, 100)}...`);
+  }
+  
   const serverFilter = {
     allTimeUpload: 'alltime_ul',
     allTimeDownload: 'alltime_dl',
@@ -380,7 +398,7 @@ exports.getMaindata = async function (clientUrl, cookie) {
   const maindata = {
     torrents: []
   };
-  res = JSON.parse(res.body);
+  res = parsedResponse;
   for (const k in serverFilter) {
     maindata[k] = res.server_state[serverFilter[k]];
   }

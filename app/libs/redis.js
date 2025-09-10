@@ -154,7 +154,7 @@ class TaskQueue {
       setTimeout(() => {
         this.enqueue(task.data, task.priority === 'high' ? 'high' : 'normal');
       }, this.retryDelay);
-      logger.info(`任务重试: ${task.id}, 第${task.retries}次重试`);
+      logger.debug(`任务重试: ${task.id}, 第${task.retries}次重试`);
       return true;
     } else {
       // 达到最大重试次数，发送到死信队列

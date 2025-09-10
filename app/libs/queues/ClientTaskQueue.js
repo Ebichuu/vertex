@@ -75,30 +75,45 @@ class ClientTaskQueue extends TaskQueue {
       const res = await client.client.getMaindata(client.clientUrl, client.cookie);
       
       if (typeof res === 'string') {
-        client.cookie.sessionId = res;
-        return await client.client.getMaindata(client.clientUrl, client.cookie);
+        if (res === 'Unauthorized') {
+          // 需要重新登录
+          await client.login();
+          return;
+        } else {
+          // 更新session ID并重试
+          client.cookie.sessionId = res;
+          return await client.client.getMaindata(client.clientUrl, client.cookie);
+        }
       }
       
-      // 处理maindata响应
+      // 完整处理maindata响应（使用原始逻辑）
       if (res.torrents) {
-        const oldMaindata = client.maindata;
+        const statusLeeching = ['downloading', 'stalledDL', 'Downloading'];
+        const statusSeeding = ['uploading', 'stalledUP', 'Seeding'];
+        
         client.maindata = res;
+        // Add client ID and alias
+        client.maindata.clientId = client.id;
+        client.maindata.clientAlias = client.alias;
+        client.maindata.leechingCount = 0;
+        client.maindata.seedingCount = 0;
+        client.maindata.usedSpace = 0;
+        
+        client.maindata.torrents.forEach((item) => {
+          item.trackerStatus = client.trackerStatus[item.hash] || '';
+          client.maindata.usedSpace += item.completed;
+          if (statusLeeching.indexOf(item.state) !== -1) {
+            client.maindata.leechingCount += 1;
+          } else if (statusSeeding.indexOf(item.state) !== -1) {
+            client.maindata.seedingCount += 1;
+          }
+        });
+        
+        client.avgDownloadSpeed = res.downloadSpeed * 0.1 + (client.avgDownloadSpeed || 0) * 0.9;
+        client.avgUploadSpeed = res.uploadSpeed * 0.1 + (client.avgUploadSpeed || 0) * 0.9;
+        
         client.status = true;
         client.errorCount = 0;
-        
-        // 计算平均速度
-        if (res.torrents && res.torrents.length > 0) {
-          const uploadSpeeds = res.torrents.map(torrent => torrent.uploadSpeed || 0);
-          const downloadSpeeds = res.torrents.map(torrent => torrent.downloadSpeed || 0);
-          
-          client.avgUploadSpeed = uploadSpeeds.reduce((sum, speed) => sum + speed, 0);
-          client.avgDownloadSpeed = downloadSpeeds.reduce((sum, speed) => sum + speed, 0);
-        }
-        
-        // 处理种子状态变化
-        if (oldMaindata && oldMaindata.torrents) {
-          this.handleTorrentStatusChanges(client, oldMaindata.torrents, res.torrents);
-        }
       } else {
         logger.warn(`客户端 ${client.alias} 返回的数据格式异常`);
       }
