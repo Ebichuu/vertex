@@ -7,6 +7,7 @@ const moment = require('moment');
 const logger = require('../libs/logger');
 const cron = require('node-cron');
 const Push = require('./Push');
+const ClientTaskQueue = require('../libs/queues/ClientTaskQueue');
 
 const clients = {
   qBittorrent: qb,
@@ -33,7 +34,15 @@ class Client {
     this.maxLeechNum = client.maxLeechNum;
     this.sameServerClients = client.sameServerClients;
     this.maindata = null;
-    this.maindataJob = cron.schedule(client.cron, () => this.getMaindata());
+    
+    // 初始化任务队列（全局单例）
+    if (!global.clientTaskQueue) {
+      global.clientTaskQueue = new ClientTaskQueue();
+    }
+    this.taskQueue = global.clientTaskQueue;
+    
+    // 修改定时任务，改为入队操作
+    this.maindataJob = cron.schedule(client.cron, () => this.scheduleGetMaindata());
     this.spaceAlarm = client.spaceAlarm;
     this.spaceAlarmJob = cron.schedule('*/15 * * * *', () => this.pushSpaceAlarm());
     this.notify = util.listPush().filter(item => item.id === client.notify)[0] || {};
@@ -43,7 +52,7 @@ class Client {
     this.ntf = new Push(this.notify);
     this.mnt = new Push(this.monitor);
     if (client.type === 'qBittorrent' && client.autoReannounce) {
-      this.reannounceJob = cron.schedule('3 * * * * *', () => this.autoReannounce());
+      this.reannounceJob = cron.schedule('3 * * * * *', () => this.scheduleAutoReannounce());
     }
     this.reannouncedHash = [];
     this._deleteRules = client.deleteRules;
@@ -51,7 +60,7 @@ class Client {
     this._rejectDeleteRules = client.rejectDeleteRules || [];
     this.rejectDeleteRules = util.listDeleteRule().filter(item => this._rejectDeleteRules.indexOf(item.id) !== -1).sort((a, b) => b.priority - a.priority);
     if (client.autoDelete) {
-      this.autoDeleteJob = cron.schedule(client.autoDeleteCron, () => this.autoDelete());
+      this.autoDeleteJob = cron.schedule(client.autoDeleteCron, () => this.scheduleAutoDelete());
       this.fitTime = {};
       this.probabilisticStats = {}; // 概率统计数据
       for (const rule of this.deleteRules) {
@@ -60,13 +69,13 @@ class Client {
           if (rule.probabilisticFitTime) {
             this.probabilisticStats[rule.id] = {};
           }
-          rule.fitTimeJob = cron.schedule('*/5 * * * * *', () => this.flashFitTime(rule));
+          rule.fitTimeJob = cron.schedule('*/5 * * * * *', () => this.scheduleFlashFitTime(rule));
         }
       }
     }
-    this.recordJob = cron.schedule('20 */5 * * * *', () => this.record());
+    this.recordJob = cron.schedule('20 */5 * * * *', () => this.scheduleRecord());
     if (client.type === 'qBittorrent') {
-      this.trackerSyncJob = cron.schedule('*/5 * * * *', () => this.trackerSync());
+      this.trackerSyncJob = cron.schedule('*/5 * * * *', () => this.scheduleTrackerSync());
     }
     this.messageId = 0;
     this.errorCount = 0;
@@ -743,6 +752,79 @@ class Client {
       return await this.client.getLogs(this.clientUrl, this.cookie, hash);
     }
     return [];
+  }
+
+  // 调度获取主数据任务
+  async scheduleGetMaindata() {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'getMaindata'
+      });
+    } catch (error) {
+      logger.error(`调度客户端主数据任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度自动删种任务
+  async scheduleAutoDelete() {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'autoDelete'
+      }, 'high'); // 删种任务使用高优先级
+    } catch (error) {
+      logger.error(`调度删种任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度Tracker同步任务
+  async scheduleTrackerSync() {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'trackerSync'
+      });
+    } catch (error) {
+      logger.error(`调度Tracker同步任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度自动重新汇报任务
+  async scheduleAutoReannounce() {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'autoReannounce'
+      });
+    } catch (error) {
+      logger.error(`调度自动重新汇报任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度记录任务
+  async scheduleRecord() {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'record'
+      });
+    } catch (error) {
+      logger.error(`调度记录任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度适配时间刷新任务
+  async scheduleFlashFitTime(rule) {
+    try {
+      await this.taskQueue.enqueue({
+        clientId: this.id,
+        action: 'flashFitTime',
+        params: { rule }
+      });
+    } catch (error) {
+      logger.error(`调度适配时间刷新任务失败: ${this.alias}`, error);
+    }
   }
 }
 module.exports = Client;

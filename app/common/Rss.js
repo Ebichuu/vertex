@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
+const RssTaskQueue = require('../libs/queues/RssTaskQueue');
 const Push = require('./Push');
 
 class Rss {
@@ -45,6 +46,12 @@ class Rss {
     this.ntf = new Push(this.notify);
     this._acceptRules = rss.acceptRules || [];
     this._rejectRules = rss.rejectRules || [];
+    
+    // 初始化任务队列（全局单例）
+    if (!global.rssTaskQueue) {
+      global.rssTaskQueue = new RssTaskQueue();
+    }
+    this.taskQueue = global.rssTaskQueue;
     this.acceptRules = util.listRssRule().filter(item => (this._acceptRules.indexOf(item.id) !== -1)).sort((a, b) => +b.priority - +a.priority);
     this.rejectRules = util.listRssRule().filter(item => (this._rejectRules.indexOf(item.id) !== -1)).sort((a, b) => +b.priority - +a.priority);
     this.downloadLimit = util.calSize(rss.downloadLimit, rss.downloadLimitUnit);
@@ -54,29 +61,9 @@ class Rss {
     this.maxClientDownloadCount = +rss.maxClientDownloadCount;
     this.isRunning = false;
     if (!rss.dryrun) {
-      this.rssJob = cron.schedule(rss.cron, async () => { 
-        try { 
-          if (this.isRunning) {
-            logger.warn(this.alias, 'RSS任务已在运行中，跳过本次执行');
-            return;
-          }
-          
-          this.isRunning = true;
-          
-          try {
-            logger.debug(this.alias, '开始执行RSS任务');
-            await this.rss(); 
-          } catch (err) {
-            logger.error(this.alias, '执行RSS任务出错:', err);
-          } finally {
-            this.isRunning = false;
-          }
-        } catch (e) { 
-          this.isRunning = false;
-          logger.error(this.alias, '启动RSS任务失败:', e); 
-        } 
-      });
-      this.clearCount = cron.schedule('0 * * * *', () => { this.addCount = 0; });
+      // 修改为入队操作
+      this.rssJob = cron.schedule(rss.cron, () => this.scheduleRssFetch());
+      this.clearCount = cron.schedule('0 * * * *', () => this.scheduleClearCount());
       
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
@@ -1328,6 +1315,30 @@ class Rss {
     }
     
     return results;
+  }
+
+  // 调度RSS获取任务
+  async scheduleRssFetch() {
+    try {
+      await this.taskQueue.enqueue({
+        rssId: this.id,
+        action: 'fetchRss'
+      });
+    } catch (error) {
+      logger.error(`调度RSS任务失败: ${this.alias}`, error);
+    }
+  }
+
+  // 调度清零计数任务
+  async scheduleClearCount() {
+    try {
+      await this.taskQueue.enqueue({
+        rssId: this.id,
+        action: 'clearCount'
+      });
+    } catch (error) {
+      logger.error(`调度清零任务失败: ${this.alias}`, error);
+    }
   }
 }
 module.exports = Rss;

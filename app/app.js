@@ -71,6 +71,56 @@ const init = function () {
   logger.info('核心维护定时任务已启动 (中国时区):');
   logger.info('- 数据库清理任务: 每天凌晨0点1分执行');
   logger.info('- 每日统计聚合任务: 每天凌晨2点执行');
+
+  // 添加队列监控任务
+  global.queueMonitor = cron.schedule('*/30 * * * * *', async () => {
+    try {
+      if (global.clientTaskQueue) {
+        const clientStatus = await global.clientTaskQueue.getQueueStatus();
+        logger.debug('客户端队列状态:', clientStatus);
+        
+        if (clientStatus.total > 20) {
+          logger.warn(`客户端队列积压严重: ${clientStatus.total} 个任务待处理, 活跃工作者: ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent}`);
+        }
+      }
+      
+      if (global.rssTaskQueue) {
+        const rssStatus = await global.rssTaskQueue.getQueueStatus();
+        logger.debug('RSS队列状态:', rssStatus);
+        
+        if (rssStatus.total > 10) {
+          logger.warn(`RSS队列积压严重: ${rssStatus.total} 个任务待处理, 活跃工作者: ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent}`);
+        }
+      }
+
+      // 每5分钟输出一次详细统计
+      const now = moment();
+      if (now.minute() % 5 === 0 && now.second() < 30) {
+        const clientTasks = Object.keys(global.runningClient || {}).length;
+        const rssTasks = Object.keys(global.runningRss || {}).length;
+        const siteTasks = Object.keys(global.runningSite || {}).length;
+        
+        logger.info(`=== 任务队列统计 ===`);
+        logger.info(`客户端数量: ${clientTasks}, RSS任务数量: ${rssTasks}, 站点数量: ${siteTasks}`);
+        
+        if (global.clientTaskQueue) {
+          const clientStatus = await global.clientTaskQueue.getQueueStatus();
+          logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者`);
+        }
+        
+        if (global.rssTaskQueue) {
+          const rssStatus = await global.rssTaskQueue.getQueueStatus();
+          logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者`);
+        }
+        logger.info(`=====================`);
+      }
+    } catch (error) {
+      logger.error('队列监控失败:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai'
+  });
   
   // 添加测试任务状态的辅助函数
   global.testDailyStatsTask = async () => {
@@ -249,6 +299,11 @@ function setupGracefulShutdown() {
       if (global.cookiecloud) {
         global.cookiecloud.stop();
         logger.info('CookieCloud 同步任务已停止');
+      }
+      
+      if (global.queueMonitor) {
+        global.queueMonitor.stop();
+        logger.info('队列监控任务已停止');
       }
       
       // 停止所有运行中的组件
