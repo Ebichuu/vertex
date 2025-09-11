@@ -4,16 +4,109 @@ const logger = require('../logger');
 class ClientTaskQueue extends TaskQueue {
   constructor() {
     super('client_maindata', {
-      maxConcurrent: 8, // 最多同时8个客户端请求
-      maxRetries: 2,
-      retryDelay: 3000
+      maxConcurrent: 8 // 最多同时8个客户端请求，移除重试配置
     });
+    
+    // 客户端故障管理
+    this.failedClients = new Map(); // clientId -> { count, lastFailTime, blocked }
+    this.blockDuration = 1 * 60 * 1000; // 阻塞1分钟（快速响应，因为客户端查询频繁）
+    this.maxFailuresBeforeBlock = 3; // 3次连续失败后阻塞（更快识别故障）
+  }
+
+  // 检查客户端是否被阻塞
+  isClientBlocked(clientId) {
+    const clientInfo = this.failedClients.get(clientId);
+    if (!clientInfo || !clientInfo.blocked) {
+      return false;
+    }
+    
+    // 检查阻塞是否过期
+    if (Date.now() - clientInfo.lastFailTime > this.blockDuration) {
+      // 重置客户端状态
+      this.failedClients.delete(clientId);
+      logger.info(`客户端 ${clientId} 阻塞已解除，重新开始处理任务`);
+      return false;
+    }
+    
+    return true;
+  }
+
+  // 记录客户端失败
+  recordClientFailure(clientId, error) {
+    const now = Date.now();
+    const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false };
+    
+    // 如果是连接错误，计数增加
+    if (this.isConnectionError(error)) {
+      clientInfo.count++;
+      clientInfo.lastFailTime = now;
+      
+      // 达到阈值则阻塞
+      if (clientInfo.count >= this.maxFailuresBeforeBlock) {
+        clientInfo.blocked = true;
+        logger.warn(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，阻塞 ${this.blockDuration/1000} 秒`);
+      }
+    } else {
+      // 其他类型错误，重置计数
+      clientInfo.count = 0;
+    }
+    
+    this.failedClients.set(clientId, clientInfo);
+  }
+
+  // 记录客户端成功
+  recordClientSuccess(clientId) {
+    // 清除失败记录
+    this.failedClients.delete(clientId);
+  }
+
+  // 判断是否为连接错误
+  isConnectionError(error) {
+    if (!error) return false;
+    const connectionErrors = ['ESOCKETTIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'];
+    return connectionErrors.includes(error.code) || 
+           (error.message && connectionErrors.some(code => error.message.includes(code)));
+  }
+
+  // 重写enqueue方法，添加阻塞检查
+  async enqueue(taskData, priority = 'normal') {
+    const { clientId } = taskData;
+    
+    // 检查客户端是否被阻塞
+    if (clientId && this.isClientBlocked(clientId)) {
+      logger.debug(`客户端 ${clientId} 被阻塞，跳过任务入队`);
+      return;
+    }
+    
+    return super.enqueue(taskData, priority);
+  }
+
+  // 获取阻塞状态信息
+  getBlockedClientsStatus() {
+    const blocked = [];
+    for (const [clientId, info] of this.failedClients.entries()) {
+      if (info.blocked) {
+        const remaining = Math.max(0, this.blockDuration - (Date.now() - info.lastFailTime));
+        blocked.push({
+          clientId,
+          failures: info.count,
+          remainingTime: Math.ceil(remaining / 1000)
+        });
+      }
+    }
+    return blocked;
   }
 
   async executeTask(task) {
     const { clientId, action, params } = task.data;
     
     try {
+      // 再次检查阻塞状态
+      if (this.isClientBlocked(clientId)) {
+        logger.debug(`客户端 ${clientId} 被阻塞，跳过任务执行`);
+        return;
+      }
+      
       const client = global.runningClient[clientId];
       if (!client) {
         logger.warn(`客户端 ${clientId} 不存在，跳过任务`);
@@ -50,23 +143,34 @@ class ClientTaskQueue extends TaskQueue {
       const duration = Date.now() - startTime;
       logger.debug(`客户端任务完成: ${client.alias}, 动作: ${action}, 耗时: ${duration}ms`);
       
+      // 记录成功
+      this.recordClientSuccess(clientId);
+      
       return result;
     } catch (error) {
+      // 记录失败
+      this.recordClientFailure(clientId, error);
+      
       logger.error(`客户端任务执行失败: ${clientId}, 动作: ${task.data.action}`, error);
       
-      // 重试逻辑由基类TaskQueue处理
-      if (!await this.retryTask(task)) {
-        logger.error(`客户端任务达到最大重试次数，已发送到死信队列: ${clientId}, 动作: ${task.data.action}`);
-        
-        // 标记客户端状态
-        const client = global.runningClient[clientId];
-        if (client) {
-          client.errorCount++;
-          client.status = false;
-        }
+      // 对于被阻塞的客户端，直接丢弃任务
+      if (this.isClientBlocked(clientId)) {
+        logger.debug(`客户端 ${clientId} 已被阻塞，任务已丢弃`);
+        return;
       }
       
-      throw error;
+      // 无重试，直接丢弃失败任务
+      this.logTaskFailure(task, error);
+      
+      // 标记客户端状态
+      const client = global.runningClient[clientId];
+      if (client) {
+        client.errorCount++;
+        client.status = false;
+      }
+      
+      // 不再重新抛出错误，让任务队列继续处理下一个任务
+      logger.debug(`客户端任务失败已处理: ${clientId}, 继续处理下一个任务`);
     }
   }
 

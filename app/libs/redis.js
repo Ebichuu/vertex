@@ -147,57 +147,9 @@ class TaskQueue {
     };
   }
 
-  // 重试任务
-  async retryTask(task) {
-    if (task.retries < this.maxRetries) {
-      task.retries++;
-      setTimeout(() => {
-        this.enqueue(task.data, task.priority === 'high' ? 'high' : 'normal');
-      }, this.retryDelay);
-      logger.debug(`任务重试: ${task.id}, 第${task.retries}次重试`);
-      return true;
-    } else {
-      // 达到最大重试次数，发送到死信队列
-      await this.sendToDeadLetterQueue(task);
-      return false;
-    }
-  }
-
-  // 发送任务到死信队列
-  async sendToDeadLetterQueue(task) {
-    try {
-      const deadLetterTask = {
-        ...task,
-        failedAt: Date.now(),
-        queueName: this.queueName,
-        finalError: task.lastError || 'Unknown error'
-      };
-      
-      const dlqKey = `vertex:dlq:${this.queueName}`;
-      await exports.lpush(dlqKey, JSON.stringify(deadLetterTask));
-      
-      logger.warn(`任务已发送到死信队列: ${task.id}, 队列: ${this.queueName}, 重试次数: ${task.retries}`);
-      
-      // 设置死信队列过期时间（7天）
-      await exports.expire(dlqKey, 86400 * 7);
-    } catch (error) {
-      logger.error(`发送任务到死信队列失败: ${task.id}`, error);
-    }
-  }
-
-  // 获取死信队列状态
-  async getDeadLetterQueueStatus() {
-    try {
-      const dlqKey = `vertex:dlq:${this.queueName}`;
-      const count = await exports.llen(dlqKey) || 0;
-      return {
-        queueName: this.queueName,
-        deadLetterCount: count
-      };
-    } catch (error) {
-      logger.error(`获取死信队列状态失败: ${this.queueName}`, error);
-      return { queueName: this.queueName, deadLetterCount: 0 };
-    }
+  // 记录任务失败（简单记录，不存储）
+  logTaskFailure(task, error) {
+    logger.warn(`任务失败已丢弃: ${task.id}, 队列: ${this.queueName}, 错误: ${error.message || error.toString()}`);
   }
 }
 

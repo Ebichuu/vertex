@@ -105,14 +105,26 @@ const init = function () {
         
         if (global.clientTaskQueue) {
           const clientStatus = await global.clientTaskQueue.getQueueStatus();
-          const clientDLQ = await global.clientTaskQueue.getDeadLetterQueueStatus();
-          logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者, 死信队列: ${clientDLQ.deadLetterCount}`);
+          const blockedClients = global.clientTaskQueue.getBlockedClientsStatus();
+          
+          logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者`);
+          
+          if (blockedClients.length > 0) {
+            logger.warn(`阻塞的客户端 (${blockedClients.length}): `, 
+              blockedClients.map(c => `${c.clientId}(${c.failures}次失败,${c.remainingTime}秒)`).join(', '));
+          }
         }
         
         if (global.rssTaskQueue) {
           const rssStatus = await global.rssTaskQueue.getQueueStatus();
-          const rssDLQ = await global.rssTaskQueue.getDeadLetterQueueStatus();
-          logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者, 死信队列: ${rssDLQ.deadLetterCount}`);
+          const blockedRss = global.rssTaskQueue.getBlockedRssStatus();
+          
+          logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者`);
+          
+          if (blockedRss.length > 0) {
+            logger.warn(`阻塞的RSS源 (${blockedRss.length}): `, 
+              blockedRss.map(r => `${r.rssId}(${r.failures}次失败,${r.remainingTime}秒)`).join(', '));
+          }
         }
         logger.info(`=====================`);
       }
