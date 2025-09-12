@@ -109,10 +109,10 @@ const init = function () {
           
           logger.info(`客户端队列: ${clientStatus.total} 待处理, ${clientStatus.activeWorkers}/${clientStatus.maxConcurrent} 工作者`);
           
-          if (blockedClients.length > 0) {
-            logger.warn(`阻塞的客户端 (${blockedClients.length}): `, 
-              blockedClients.map(c => `${c.clientId}(${c.failures}次失败,${c.remainingTime}秒)`).join(', '));
-          }
+        if (blockedClients.length > 0) {
+          logger.info(`阻塞的客户端 (${blockedClients.length}): `, 
+            blockedClients.map(c => `${c.clientId}(${c.failures}次失败,${c.remainingTime}秒,清理${c.clearedTasks}个任务)`).join(', '));
+        }
         }
         
         if (global.rssTaskQueue) {
@@ -122,7 +122,7 @@ const init = function () {
           logger.info(`RSS队列: ${rssStatus.total} 待处理, ${rssStatus.activeWorkers}/${rssStatus.maxConcurrent} 工作者`);
           
           if (blockedRss.length > 0) {
-            logger.warn(`阻塞的RSS源 (${blockedRss.length}): `, 
+            logger.info(`阻塞的RSS源 (${blockedRss.length}): `, 
               blockedRss.map(r => `${r.rssId}(${r.failures}次失败,${r.remainingTime}秒)`).join(', '));
           }
         }

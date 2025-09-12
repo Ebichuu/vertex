@@ -4,13 +4,13 @@ const logger = require('../logger');
 class ClientTaskQueue extends TaskQueue {
   constructor() {
     super('client_maindata', {
-      maxConcurrent: 8 // 最多同时8个客户端请求，移除重试配置
+      maxConcurrent: 10 // 最多同时10个客户端请求，移除重试配置
     });
     
     // 客户端故障管理
     this.failedClients = new Map(); // clientId -> { count, lastFailTime, blocked }
-    this.blockDuration = 1 * 60 * 1000; // 阻塞1分钟（快速响应，因为客户端查询频繁）
-    this.maxFailuresBeforeBlock = 3; // 3次连续失败后阻塞（更快识别故障）
+    this.blockDuration = 2 * 60 * 1000; // 阻塞2分钟（快速响应，因为客户端查询频繁）
+    this.maxFailuresBeforeBlock = 5; // 5次连续失败后阻塞（更快识别故障）
   }
 
   // 检查客户端是否被阻塞
@@ -31,24 +31,27 @@ class ClientTaskQueue extends TaskQueue {
     return true;
   }
 
-  // 记录客户端失败
+  // 记录客户端失败（优化版：任何错误都计数）
   recordClientFailure(clientId, error) {
     const now = Date.now();
     const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false };
     
-    // 如果是连接错误，计数增加
-    if (this.isConnectionError(error)) {
-      clientInfo.count++;
-      clientInfo.lastFailTime = now;
-      
-      // 达到阈值则阻塞
-      if (clientInfo.count >= this.maxFailuresBeforeBlock) {
-        clientInfo.blocked = true;
-        logger.warn(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，阻塞 ${this.blockDuration/1000} 秒`);
-      }
-    } else {
-      // 其他类型错误，重置计数
-      clientInfo.count = 0;
+    // 任何类型的错误都计数（不再区分连接错误）
+    clientInfo.count++;
+    clientInfo.lastFailTime = now;
+    
+    // 达到阈值则阻塞并清理积压任务
+    if (clientInfo.count >= this.maxFailuresBeforeBlock) {
+      clientInfo.blocked = true;
+      // 异步清理积压任务（不阻塞当前执行）
+      this.clearClientQueue(clientId).then(clearedTasks => {
+        // 保存清理任务数量用于监控
+        clientInfo.clearedTasks = clearedTasks;
+        this.failedClients.set(clientId, clientInfo);
+        logger.warn(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，已阻塞 ${this.blockDuration/1000} 秒，清理积压任务 ${clearedTasks} 个`);
+      }).catch(error => {
+        logger.error(`清理客户端 ${clientId} 积压任务失败:`, error);
+      });
     }
     
     this.failedClients.set(clientId, clientInfo);
@@ -60,7 +63,60 @@ class ClientTaskQueue extends TaskQueue {
     this.failedClients.delete(clientId);
   }
 
-  // 判断是否为连接错误
+  // 清理指定客户端的所有积压任务
+  async clearClientQueue(clientId) {
+    let clearedCount = 0;
+    const redis = require('../redis');
+    
+    try {
+      // 清理高优先级队列
+      const highPriorityTasks = await this.removeTasksFromQueue(`${this.queueName}:high`, clientId);
+      clearedCount += highPriorityTasks;
+      
+      // 清理普通优先级队列
+      const normalPriorityTasks = await this.removeTasksFromQueue(`${this.queueName}:normal`, clientId);
+      clearedCount += normalPriorityTasks;
+      
+      logger.debug(`已清理客户端 ${clientId} 的积压任务: 高优先级 ${highPriorityTasks} 个, 普通优先级 ${normalPriorityTasks} 个`);
+    } catch (error) {
+      logger.error(`清理客户端 ${clientId} 队列时出错:`, error);
+    }
+    
+    return clearedCount;
+  }
+
+  // 从指定队列中移除特定客户端的任务
+  async removeTasksFromQueue(queueKey, clientId) {
+    const redis = require('../redis');
+    let removedCount = 0;
+    
+    try {
+      // 获取队列中的所有任务
+      const tasks = await redis.lrange(queueKey, 0, -1);
+      if (!tasks || tasks.length === 0) return 0;
+      
+      // 逐个检查并移除匹配的任务
+      for (const taskStr of tasks) {
+        try {
+          const task = JSON.parse(taskStr);
+          if (task.data && task.data.clientId === clientId) {
+            // 移除这个任务
+            await redis.lrem(queueKey, 1, taskStr);
+            removedCount++;
+          }
+        } catch (parseError) {
+          // 跳过无法解析的任务
+          continue;
+        }
+      }
+    } catch (error) {
+      logger.error(`从队列 ${queueKey} 移除任务时出错:`, error);
+    }
+    
+    return removedCount;
+  }
+
+  // 判断是否为连接错误（保留用于日志分析）
   isConnectionError(error) {
     if (!error) return false;
     const connectionErrors = ['ESOCKETTIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'];
@@ -90,7 +146,8 @@ class ClientTaskQueue extends TaskQueue {
         blocked.push({
           clientId,
           failures: info.count,
-          remainingTime: Math.ceil(remaining / 1000)
+          remainingTime: Math.ceil(remaining / 1000),
+          clearedTasks: info.clearedTasks || 0
         });
       }
     }

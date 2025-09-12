@@ -4,7 +4,7 @@ const logger = require('../logger');
 class RssTaskQueue extends TaskQueue {
   constructor() {
     super('rss_fetch', {
-      maxConcurrent: 5 // 最多同时5个RSS请求，移除重试配置
+      maxConcurrent: 10 // 最多同时10个RSS请求，移除重试配置
     });
     
     // RSS源故障管理
