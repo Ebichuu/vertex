@@ -66,7 +66,6 @@ class ClientTaskQueue extends TaskQueue {
   // 清理指定客户端的所有积压任务
   async clearClientQueue(clientId) {
     let clearedCount = 0;
-    const redis = require('../redis');
     
     try {
       // 清理高优先级队列
