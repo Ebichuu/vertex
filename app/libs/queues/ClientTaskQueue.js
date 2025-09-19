@@ -48,7 +48,7 @@ class ClientTaskQueue extends TaskQueue {
         // 保存清理任务数量用于监控
         clientInfo.clearedTasks = clearedTasks;
         this.failedClients.set(clientId, clientInfo);
-        logger.warn(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，已阻塞 ${this.blockDuration/1000} 秒，清理积压任务 ${clearedTasks} 个`);
+        logger.error(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，已阻塞 ${this.blockDuration/1000} 秒，清理积压任务 ${clearedTasks} 个`);
       }).catch(error => {
         logger.error(`清理客户端 ${clientId} 积压任务失败:`, error);
       });
@@ -76,7 +76,7 @@ class ClientTaskQueue extends TaskQueue {
       const normalPriorityTasks = await this.removeTasksFromQueue(`${this.queueName}:normal`, clientId);
       clearedCount += normalPriorityTasks;
       
-      logger.debug(`已清理客户端 ${clientId} 的积压任务: 高优先级 ${highPriorityTasks} 个, 普通优先级 ${normalPriorityTasks} 个`);
+      logger.error(`已清理客户端 ${clientId} 的积压任务: 高优先级 ${highPriorityTasks} 个, 普通优先级 ${normalPriorityTasks} 个`);
     } catch (error) {
       logger.error(`清理客户端 ${clientId} 队列时出错:`, error);
     }
@@ -129,7 +129,7 @@ class ClientTaskQueue extends TaskQueue {
     
     // 检查客户端是否被阻塞
     if (clientId && this.isClientBlocked(clientId)) {
-      logger.debug(`客户端 ${clientId} 被阻塞，跳过任务入队`);
+      logger.error(`客户端 ${clientId} 被阻塞，跳过任务入队: ${taskData.action}`);
       return;
     }
     
@@ -159,7 +159,7 @@ class ClientTaskQueue extends TaskQueue {
     try {
       // 再次检查阻塞状态
       if (this.isClientBlocked(clientId)) {
-        logger.debug(`客户端 ${clientId} 被阻塞，跳过任务执行`);
+        logger.warn(`客户端 ${clientId} 被阻塞，跳过任务执行: ${action}`);
         return;
       }
       
@@ -204,14 +204,20 @@ class ClientTaskQueue extends TaskQueue {
       
       return result;
     } catch (error) {
+      // 先检查是否已阻塞
+      if (this.isClientBlocked(clientId)) {
+        logger.error(`客户端 ${clientId} 已被阻塞，任务已丢弃: ${task.data.action}`);
+        return;
+      }
+      
       // 记录失败
       this.recordClientFailure(clientId, error);
       
       logger.error(`客户端任务执行失败: ${clientId}, 动作: ${task.data.action}`, error);
       
-      // 对于被阻塞的客户端，直接丢弃任务
+      // 再次检查阻塞状态（可能在recordClientFailure中触发阻塞）
       if (this.isClientBlocked(clientId)) {
-        logger.debug(`客户端 ${clientId} 已被阻塞，任务已丢弃`);
+        logger.error(`客户端 ${clientId} 因连续失败已被阻塞，任务已丢弃: ${task.data.action}`);
         return;
       }
       
@@ -226,7 +232,7 @@ class ClientTaskQueue extends TaskQueue {
       }
       
       // 不再重新抛出错误，让任务队列继续处理下一个任务
-      logger.debug(`客户端任务失败已处理: ${clientId}, 继续处理下一个任务`);
+      logger.error(`客户端任务失败已处理: ${clientId}, 继续处理下一个任务`);
     }
   }
 

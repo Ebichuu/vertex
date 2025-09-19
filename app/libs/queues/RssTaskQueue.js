@@ -76,7 +76,7 @@ class RssTaskQueue extends TaskQueue {
     
     // 检查RSS源是否被阻塞
     if (rssId && this.isRssBlocked(rssId)) {
-      logger.debug(`RSS源 ${rssId} 被阻塞，跳过任务入队`);
+      logger.warn(`RSS源 ${rssId} 被阻塞，跳过任务入队: ${taskData.action}`);
       return;
     }
     
@@ -138,14 +138,20 @@ class RssTaskQueue extends TaskQueue {
       
       return result;
     } catch (error) {
+      // 先检查是否已阻塞
+      if (this.isRssBlocked(rssId)) {
+        logger.error(`RSS源 ${rssId} 已被阻塞，任务已丢弃: ${action}`);
+        return;
+      }
+      
       // 记录失败
       this.recordRssFailure(rssId, error);
       
       logger.error(`RSS任务执行失败: ${rssId}`, error);
       
-      // 对于被阻塞的RSS源，直接丢弃任务
+      // 再次检查阻塞状态（可能在recordRssFailure中触发阻塞）
       if (this.isRssBlocked(rssId)) {
-        logger.debug(`RSS源 ${rssId} 已被阻塞，任务已丢弃`);
+        logger.error(`RSS源 ${rssId} 因连续失败已被阻塞，任务已丢弃: ${action}`);
         return;
       }
       
@@ -153,7 +159,7 @@ class RssTaskQueue extends TaskQueue {
       this.logTaskFailure(task, error);
       
       // 不再重新抛出错误，让任务队列继续处理下一个任务
-      logger.debug(`RSS任务失败已处理: ${rssId}, 继续处理下一个任务`);
+      logger.error(`RSS任务失败已处理: ${rssId}, 继续处理下一个任务`);
     }
   }
 
