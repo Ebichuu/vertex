@@ -31,33 +31,54 @@ class RssTaskQueue extends TaskQueue {
     return true;
   }
 
-  // 记录RSS源失败
+  // 记录RSS源失败（修复版：确保阻塞状态立即生效）
   recordRssFailure(rssId, error) {
     const now = Date.now();
     const rssInfo = this.failedRssSources.get(rssId) || { count: 0, lastFailTime: 0, blocked: false };
     
-    // 如果是网络错误，计数增加
-    if (this.isNetworkError(error)) {
-      rssInfo.count++;
-      rssInfo.lastFailTime = now;
-      
-      // 达到阈值则阻塞
-      if (rssInfo.count >= this.maxFailuresBeforeBlock) {
-        rssInfo.blocked = true;
-        logger.warn(`RSS源 ${rssId} 连续失败 ${rssInfo.count} 次，阻塞 ${this.blockDuration/1000} 秒`);
-      }
-    } else {
-      // 其他类型错误，重置计数
-      rssInfo.count = 0;
+    // 如果已经被阻塞，不再处理
+    if (rssInfo.blocked) {
+      return;
     }
     
-    this.failedRssSources.set(rssId, rssInfo);
+    // 任何类型的错误都计数（根据用户建议移除网络错误区分）
+    rssInfo.count++;
+    rssInfo.lastFailTime = now;
+    
+    logger.debug(`RSS源 ${rssId} 失败计数: ${rssInfo.count}/${this.maxFailuresBeforeBlock}`);
+    
+    // 达到阈值则立即阻塞
+    if (rssInfo.count >= this.maxFailuresBeforeBlock) {
+      rssInfo.blocked = true;
+      rssInfo.blockedAt = now;
+      
+      // 立即保存阻塞状态
+      this.failedRssSources.set(rssId, rssInfo);
+      
+      logger.error(`RSS源 ${rssId} 连续失败 ${rssInfo.count} 次，立即阻塞 ${this.blockDuration/1000} 秒`);
+    } else {
+      // 未达到阈值，正常保存计数
+      this.failedRssSources.set(rssId, rssInfo);
+    }
   }
 
-  // 记录RSS源成功
+  // 记录RSS源成功（修复版：保留阻塞状态）
   recordRssSuccess(rssId) {
-    // 清除失败记录
-    this.failedRssSources.delete(rssId);
+    const rssInfo = this.failedRssSources.get(rssId);
+    if (!rssInfo) {
+      return; // 没有失败记录，无需处理
+    }
+    
+    // 如果RSS源被阻塞，不清除记录，只重置计数
+    if (rssInfo.blocked) {
+      rssInfo.count = 0; // 重置失败计数，但保持阻塞状态
+      this.failedRssSources.set(rssId, rssInfo);
+      logger.debug(`RSS源 ${rssId} 成功执行任务，重置失败计数，但保持阻塞状态`);
+    } else {
+      // 未被阻塞，清除失败记录
+      this.failedRssSources.delete(rssId);
+      logger.debug(`RSS源 ${rssId} 成功执行任务，清除失败记录`);
+    }
   }
 
   // 判断是否为网络错误

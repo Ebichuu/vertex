@@ -31,36 +31,67 @@ class ClientTaskQueue extends TaskQueue {
     return true;
   }
 
-  // 记录客户端失败（优化版：任何错误都计数）
+  // 记录客户端失败（修复版：确保阻塞状态立即生效）
   recordClientFailure(clientId, error) {
     const now = Date.now();
     const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false };
     
-    // 任何类型的错误都计数（不再区分连接错误）
+    // 如果已经被阻塞，不再处理
+    if (clientInfo.blocked) {
+      return;
+    }
+    
+    // 任何类型的错误都计数
     clientInfo.count++;
     clientInfo.lastFailTime = now;
     
-    // 达到阈值则阻塞并清理积压任务
+    logger.debug(`客户端 ${clientId} 失败计数: ${clientInfo.count}/${this.maxFailuresBeforeBlock}`);
+    
+    // 达到阈值则立即阻塞
     if (clientInfo.count >= this.maxFailuresBeforeBlock) {
       clientInfo.blocked = true;
-      // 异步清理积压任务（不阻塞当前执行）
+      clientInfo.blockedAt = now;
+      
+      // 立即保存阻塞状态
+      this.failedClients.set(clientId, clientInfo);
+      
+      logger.error(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，立即阻塞 ${this.blockDuration/1000} 秒`);
+      
+      // 异步清理积压任务（不影响阻塞状态）
       this.clearClientQueue(clientId).then(clearedTasks => {
-        // 保存清理任务数量用于监控
-        clientInfo.clearedTasks = clearedTasks;
-        this.failedClients.set(clientId, clientInfo);
-        logger.error(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，已阻塞 ${this.blockDuration/1000} 秒，清理积压任务 ${clearedTasks} 个`);
+        // 更新清理任务数量（不改变阻塞状态）
+        const updatedInfo = this.failedClients.get(clientId);
+        if (updatedInfo && updatedInfo.blocked) {
+          updatedInfo.clearedTasks = clearedTasks;
+          this.failedClients.set(clientId, updatedInfo);
+          logger.error(`已清理客户端 ${clientId} 积压任务 ${clearedTasks} 个`);
+        }
       }).catch(error => {
         logger.error(`清理客户端 ${clientId} 积压任务失败:`, error);
       });
+    } else {
+      // 未达到阈值，正常保存计数
+      this.failedClients.set(clientId, clientInfo);
     }
-    
-    this.failedClients.set(clientId, clientInfo);
   }
 
-  // 记录客户端成功
+  // 记录客户端成功（修复版：保留阻塞状态）
   recordClientSuccess(clientId) {
-    // 清除失败记录
-    this.failedClients.delete(clientId);
+    const clientInfo = this.failedClients.get(clientId);
+    if (!clientInfo) {
+      return; // 没有失败记录，无需处理
+    }
+    
+    // 如果客户端被阻塞，不清除记录，只重置计数
+    if (clientInfo.blocked) {
+      clientInfo.count = 0; // 重置失败计数，但保持阻塞状态
+      this.failedClients.set(clientId, clientInfo);
+      logger.debug(`客户端 ${clientId} 成功执行任务，重置失败计数，但保持阻塞状态`);
+    } else {
+      // 未被阻塞，清除失败记录
+      this.failedClients.delete(clientId);
+      logger.debug(`客户端 ${clientId} 成功执行任务，清除失败记录`);
+    }
   }
 
   // 清理指定客户端的所有积压任务
@@ -129,7 +160,8 @@ class ClientTaskQueue extends TaskQueue {
     
     // 检查客户端是否被阻塞
     if (clientId && this.isClientBlocked(clientId)) {
-      logger.error(`客户端 ${clientId} 被阻塞，跳过任务入队: ${taskData.action}`);
+      const clientInfo = this.failedClients.get(clientId);
+      logger.error(`客户端 ${clientId} 被阻塞，跳过任务入队: ${taskData.action}, 失败次数: ${clientInfo?.count}, 阻塞时间: ${clientInfo?.blockedAt ? new Date(clientInfo.blockedAt).toISOString() : 'unknown'}`);
       return;
     }
     
