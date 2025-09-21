@@ -219,13 +219,12 @@ class ClientTaskQueue extends TaskQueue {
       const startTime = Date.now();
       
       // 添加任务超时检测（30秒超时）
-      const timeoutPromise = new Promise((_, reject) => {
+      const timeoutPromise = new Promise((resolve, reject) => {
         setTimeout(() => {
           reject(new Error(`任务超时: ${action} (30秒)`));
         }, 30000);
       });
 
-      let result;
       const taskPromise = (async () => {
         switch (action) {
           case 'getMaindata':
@@ -246,7 +245,7 @@ class ClientTaskQueue extends TaskQueue {
       })();
       
       // 使用Promise.race来实现超时
-      result = await Promise.race([taskPromise, timeoutPromise]);
+      const result = await Promise.race([taskPromise, timeoutPromise]);
 
       const duration = Date.now() - startTime;
       logger.debug(`客户端任务完成: ${client.alias}, 动作: ${action}, 耗时: ${duration}ms`);
