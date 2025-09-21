@@ -46,6 +46,8 @@ exports.lpush = util.promisify(client.lpush).bind(client);
 exports.rpop = util.promisify(client.rpop).bind(client);
 exports.brpop = util.promisify(client.brpop).bind(client);
 exports.llen = util.promisify(client.llen).bind(client);
+exports.lrange = util.promisify(client.lrange).bind(client);
+exports.lrem = util.promisify(client.lrem).bind(client);
 exports.publish = util.promisify(client.publish).bind(client);
 exports.expire = util.promisify(client.expire).bind(client);
 

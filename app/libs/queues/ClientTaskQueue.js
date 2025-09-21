@@ -31,10 +31,10 @@ class ClientTaskQueue extends TaskQueue {
     return true;
   }
 
-  // 记录客户端失败（修复版：确保阻塞状态立即生效）
+  // 记录客户端失败（修复版：确保阻塞状态立即生效，支持快速失败检测）
   recordClientFailure(clientId, error) {
     const now = Date.now();
-    const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false };
+    const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false, quickFailures: [] };
     
     // 如果已经被阻塞，不再处理
     if (clientInfo.blocked) {
@@ -45,17 +45,31 @@ class ClientTaskQueue extends TaskQueue {
     clientInfo.count++;
     clientInfo.lastFailTime = now;
     
-    logger.debug(`客户端 ${clientId} 失败计数: ${clientInfo.count}/${this.maxFailuresBeforeBlock}`);
+    // 记录快速失败时间戳（用于检测连续快速失败）
+    if (!clientInfo.quickFailures) {
+      clientInfo.quickFailures = [];
+    }
+    clientInfo.quickFailures.push(now);
     
-    // 达到阈值则立即阻塞
-    if (clientInfo.count >= this.maxFailuresBeforeBlock) {
+    // 保留最近2分钟的失败记录
+    const twoMinutesAgo = now - 2 * 60 * 1000;
+    clientInfo.quickFailures = clientInfo.quickFailures.filter(time => time > twoMinutesAgo);
+    
+    logger.debug(`客户端 ${clientId} 失败计数: ${clientInfo.count}/${this.maxFailuresBeforeBlock}, 近2分钟快速失败: ${clientInfo.quickFailures.length} 次`);
+    
+    // 快速失败检测：2分钟内失败10次以上，立即阻塞（用于处理网络超时导致的长期阻塞）
+    const shouldBlockForQuickFailures = clientInfo.quickFailures.length >= 10;
+    
+    // 达到阈值或快速失败则立即阻塞
+    if (clientInfo.count >= this.maxFailuresBeforeBlock || shouldBlockForQuickFailures) {
       clientInfo.blocked = true;
       clientInfo.blockedAt = now;
       
       // 立即保存阻塞状态
       this.failedClients.set(clientId, clientInfo);
       
-      logger.error(`客户端 ${clientId} 连续失败 ${clientInfo.count} 次，立即阻塞 ${this.blockDuration/1000} 秒`);
+      const blockReason = shouldBlockForQuickFailures ? `2分钟内快速失败${clientInfo.quickFailures.length}次` : `连续失败${clientInfo.count}次`;
+      logger.error(`客户端 ${clientId} ${blockReason}，立即阻塞 ${this.blockDuration/1000} 秒`);
       
       // 异步清理积压任务（不影响阻塞状态）
       this.clearClientQueue(clientId).then(clearedTasks => {
@@ -203,30 +217,36 @@ class ClientTaskQueue extends TaskQueue {
 
       logger.debug(`开始执行客户端任务: ${client.alias}, 动作: ${action}`);
       const startTime = Date.now();
+      
+      // 添加任务超时检测（30秒超时）
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`任务超时: ${action} (30秒)`));
+        }, 30000);
+      });
 
       let result;
-      switch (action) {
-        case 'getMaindata':
-          result = await this.executeGetMaindata(client);
-          break;
-        case 'autoDelete':
-          result = await this.executeAutoDelete(client, params);
-          break;
-        case 'trackerSync':
-          result = await this.executeTrackerSync(client);
-          break;
-        case 'autoReannounce':
-          result = await this.executeAutoReannounce(client);
-          break;
-        case 'record':
-          result = await this.executeRecord(client);
-          break;
-        case 'flashFitTime':
-          result = await this.executeFlashFitTime(client, params);
-          break;
-        default:
-          throw new Error(`未知的客户端动作: ${action}`);
-      }
+      const taskPromise = (async () => {
+        switch (action) {
+          case 'getMaindata':
+            return await this.executeGetMaindata(client);
+          case 'autoDelete':
+            return await this.executeAutoDelete(client, params);
+          case 'trackerSync':
+            return await this.executeTrackerSync(client);
+          case 'autoReannounce':
+            return await this.executeAutoReannounce(client);
+          case 'record':
+            return await this.executeRecord(client);
+          case 'flashFitTime':
+            return await this.executeFlashFitTime(client, params);
+          default:
+            throw new Error(`未知的客户端动作: ${action}`);
+        }
+      })();
+      
+      // 使用Promise.race来实现超时
+      result = await Promise.race([taskPromise, timeoutPromise]);
 
       const duration = Date.now() - startTime;
       logger.debug(`客户端任务完成: ${client.alias}, 动作: ${action}, 耗时: ${duration}ms`);
