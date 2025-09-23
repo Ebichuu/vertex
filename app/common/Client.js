@@ -314,6 +314,17 @@ class Client {
     }
     this.recordJob.stop();
     delete this.recordJob;
+    
+    // 清理任务队列中的阻塞状态和积压任务
+    if (this.taskQueue) {
+      try {
+        this.taskQueue.cleanupClientOnDestroy(this.id);
+        logger.info(`已清理客户端 ${this.alias} 的阻塞状态和积压任务`);
+      } catch (error) {
+        logger.error(`清理客户端 ${this.alias} 任务队列失败:`, error);
+      }
+    }
+    
     delete global.runningClient[this.id];
   };
 

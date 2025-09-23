@@ -120,6 +120,16 @@ class RssTaskQueue extends TaskQueue {
     return blocked;
   }
 
+  // 清理RSS源销毁时的状态
+  cleanupRssOnDestroy(rssId) {
+    // 清除失败记录和阻塞状态
+    const rssInfo = this.failedRssSources.get(rssId);
+    if (rssInfo) {
+      this.failedRssSources.delete(rssId);
+      logger.info(`已清除RSS源 ${rssId} 的阻塞状态`);
+    }
+  }
+
   async executeTask(task) {
     const { rssId, action, params } = task.data;
     

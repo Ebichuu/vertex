@@ -199,6 +199,26 @@ class ClientTaskQueue extends TaskQueue {
     return blocked;
   }
 
+  // 清理客户端销毁时的状态和任务
+  async cleanupClientOnDestroy(clientId) {
+    // 清除失败记录和阻塞状态
+    const clientInfo = this.failedClients.get(clientId);
+    if (clientInfo) {
+      this.failedClients.delete(clientId);
+      logger.info(`已清除客户端 ${clientId} 的阻塞状态`);
+    }
+    
+    // 清理积压任务
+    try {
+      const clearedTasks = await this.clearClientQueue(clientId);
+      logger.info(`已清理客户端 ${clientId} 的积压任务 ${clearedTasks} 个`);
+      return clearedTasks;
+    } catch (error) {
+      logger.error(`清理客户端 ${clientId} 积压任务失败:`, error);
+      return 0;
+    }
+  }
+
   async executeTask(task) {
     const { clientId, action, params } = task.data;
     

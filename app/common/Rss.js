@@ -199,6 +199,16 @@ class Rss {
     // 设置实例为非运行状态
     this.isRunning = false;
     
+    // 清理任务队列中的阻塞状态
+    if (this.taskQueue) {
+      try {
+        this.taskQueue.cleanupRssOnDestroy(this.id);
+        logger.info(`已清理RSS源 ${this.alias} 的阻塞状态`);
+      } catch (error) {
+        logger.error(`清理RSS源 ${this.alias} 任务队列失败:`, error);
+      }
+    }
+    
     delete global.runningRss[this.id];
   }
 
