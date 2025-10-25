@@ -667,8 +667,12 @@ class Client {
   }
 
   async trackerSync () {
-    if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
+    if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) {
+      logger.debug(`下载器 ${this.alias} tracker同步跳过: maindata=${!!this.maindata}, torrents=${this.maindata?.torrents?.length || 0}`);
+      return;
+    }
     const torrents = this.maindata.torrents;
+    let syncCount = 0;
     for (const torrent of torrents) {
       try {
         if (await redis.get(`vertex:torrent_tracker:${torrent.hash}`)) continue;
@@ -687,9 +691,13 @@ class Client {
         }
         const trackerList = JSON.parse(body);
         this.trackerStatus[torrent.hash] = trackerList.filter(i => i.url.indexOf('**') === -1).map(i => i.msg).join('');
+        syncCount++;
       } catch (e) {
         logger.error('下载器', this.alias, '种子', torrent.name, 'tracker 状态同步失败, 报错如下:\n', e);
       }
+    }
+    if (syncCount > 0) {
+      logger.info(`下载器 ${this.alias} tracker同步完成: ${syncCount}/${torrents.length} 个种子`);
     }
   };
 
