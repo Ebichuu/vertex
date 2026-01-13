@@ -7,6 +7,15 @@ class ClientTaskQueue extends TaskQueue {
       maxConcurrent: 10 // 最多同时10个客户端请求，移除重试配置
     });
     
+    this.actionTimeoutMs = {
+      getMaindata: 30000,
+      autoDelete: 180000,
+      trackerSync: 300000,
+      autoReannounce: 60000,
+      record: 120000,
+      flashFitTime: 60000
+    };
+
     // 客户端故障管理
     this.failedClients = new Map(); // clientId -> { count, lastFailTime, blocked }
     this.blockDuration = 2 * 60 * 1000; // 阻塞2分钟（快速响应，因为客户端查询频繁）
@@ -146,6 +155,9 @@ class ClientTaskQueue extends TaskQueue {
           if (task.data && task.data.clientId === clientId) {
             // 移除这个任务
             await redis.lrem(queueKey, 1, taskStr);
+            if (task.dedupeKey) {
+              await redis.del(task.dedupeKey);
+            }
             removedCount++;
           }
         } catch (parseError) {
@@ -169,6 +181,27 @@ class ClientTaskQueue extends TaskQueue {
   }
 
   // 重写enqueue方法，添加阻塞检查
+  _getActionTimeout(action, taskData) {
+    if (taskData && Number.isFinite(taskData.timeoutMs) && taskData.timeoutMs > 0) {
+      return taskData.timeoutMs;
+    }
+    return this.actionTimeoutMs[action] || 30000;
+  }
+
+  _getDedupeConfig(taskData) {
+    const { clientId, action, params } = taskData || {};
+    if (!clientId || !action) {
+      return {};
+    }
+    let key = `vertex:queue:dedupe:client:${clientId}:${action}`;
+    if (action === 'flashFitTime' && params?.rule?.id) {
+      key = `${key}:${params.rule.id}`;
+    }
+    const timeoutMs = this._getActionTimeout(action, taskData);
+    const ttlSeconds = Math.ceil(timeoutMs / 1000) + 60;
+    return { dedupeKey: key, dedupeTtlSeconds: ttlSeconds };
+  }
+
   async enqueue(taskData, priority = 'normal') {
     const { clientId } = taskData;
     
@@ -178,8 +211,9 @@ class ClientTaskQueue extends TaskQueue {
       logger.error(`客户端 ${clientId} 被阻塞，跳过任务入队: ${taskData.action}, 失败次数: ${clientInfo?.count}, 阻塞时间: ${clientInfo?.blockedAt ? new Date(clientInfo.blockedAt).toISOString() : 'unknown'}`);
       return;
     }
-    
-    return super.enqueue(taskData, priority);
+
+    const dedupeConfig = this._getDedupeConfig(taskData);
+    return super.enqueue(taskData, priority, dedupeConfig);
   }
 
   // 获取阻塞状态信息
@@ -238,11 +272,12 @@ class ClientTaskQueue extends TaskQueue {
       logger.debug(`开始执行客户端任务: ${client.alias}, 动作: ${action}`);
       const startTime = Date.now();
       
-      // 添加任务超时检测（30秒超时）
+      const timeoutMs = this._getActionTimeout(action, task.data);
+      // 添加任务超时检测
       const timeoutPromise = new Promise((resolve, reject) => {
         setTimeout(() => {
-          reject(new Error(`任务超时: ${action} (30秒)`));
-        }, 30000);
+          reject(new Error(`任务超时: ${action} (${Math.ceil(timeoutMs / 1000)}秒)`));
+        }, timeoutMs);
       });
 
       const taskPromise = (async () => {

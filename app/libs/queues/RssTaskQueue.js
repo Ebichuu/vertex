@@ -6,6 +6,11 @@ class RssTaskQueue extends TaskQueue {
     super('rss_fetch', {
       maxConcurrent: 10 // 最多同时10个RSS请求，移除重试配置
     });
+
+    this.actionTimeoutMs = {
+      fetchRss: 300000,
+      clearCount: 10000
+    };
     
     // RSS源故障管理
     this.failedRssSources = new Map(); // rssId -> { count, lastFailTime, blocked }
@@ -92,6 +97,24 @@ class RssTaskQueue extends TaskQueue {
   }
 
   // 重写enqueue方法，添加阻塞检查
+  _getActionTimeout(action, taskData) {
+    if (taskData && Number.isFinite(taskData.timeoutMs) && taskData.timeoutMs > 0) {
+      return taskData.timeoutMs;
+    }
+    return this.actionTimeoutMs[action] || 30000;
+  }
+
+  _getDedupeConfig(taskData) {
+    const { rssId, action } = taskData || {};
+    if (!rssId || !action) {
+      return {};
+    }
+    const key = `vertex:queue:dedupe:rss:${rssId}:${action}`;
+    const timeoutMs = this._getActionTimeout(action, taskData);
+    const ttlSeconds = Math.ceil(timeoutMs / 1000) + 60;
+    return { dedupeKey: key, dedupeTtlSeconds: ttlSeconds };
+  }
+
   async enqueue(taskData, priority = 'normal') {
     const { rssId } = taskData;
     
@@ -100,8 +123,9 @@ class RssTaskQueue extends TaskQueue {
       logger.warn(`RSS源 ${rssId} 被阻塞，跳过任务入队: ${taskData.action}`);
       return;
     }
-    
-    return super.enqueue(taskData, priority);
+
+    const dedupeConfig = this._getDedupeConfig(taskData);
+    return super.enqueue(taskData, priority, dedupeConfig);
   }
 
   // 获取阻塞状态信息
@@ -149,17 +173,25 @@ class RssTaskQueue extends TaskQueue {
       logger.debug(`开始执行RSS任务: ${rssInstance.alias}, 动作: ${action}`);
       const startTime = Date.now();
 
-      let result;
-      switch (action) {
-        case 'fetchRss':
-          result = await this.executeFetchRss(rssInstance, params);
-          break;
-        case 'clearCount':
-          result = await this.executeClearCount(rssInstance);
-          break;
-        default:
-          throw new Error(`未知的RSS动作: ${action}`);
-      }
+      const timeoutMs = this._getActionTimeout(action, task.data);
+      const taskPromise = (async () => {
+        switch (action) {
+          case 'fetchRss':
+            return await this.executeFetchRss(rssInstance, params);
+          case 'clearCount':
+            return await this.executeClearCount(rssInstance);
+          default:
+            throw new Error(`未知的RSS动作: ${action}`);
+        }
+      })();
+
+      const timeoutPromise = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          reject(new Error(`任务超时: ${action} (${Math.ceil(timeoutMs / 1000)}秒)`));
+        }, timeoutMs);
+      });
+
+      const result = await Promise.race([taskPromise, timeoutPromise]);
 
       const duration = Date.now() - startTime;
       logger.debug(`RSS任务完成: ${rssInstance.alias}, 耗时: ${duration}ms`);

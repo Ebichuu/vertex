@@ -68,21 +68,60 @@ class TaskQueue {
   }
 
   // 添加任务到队列
-  async enqueue(taskData, priority = 'normal') {
+  async _acquireDedupe(dedupeKey, dedupeTtlSeconds) {
+    if (!dedupeKey) return true;
+    const acquired = await exports.setnx(dedupeKey, 1);
+    if (acquired !== 1) {
+      return false;
+    }
+    if (dedupeTtlSeconds) {
+      await exports.expire(dedupeKey, dedupeTtlSeconds);
+    }
+    return true;
+  }
+
+  async _releaseDedupe(dedupeKey) {
+    if (!dedupeKey) return;
+    try {
+      await exports.del(dedupeKey);
+    } catch (error) {
+      logger.debug(`释放队列去重标记失败: ${dedupeKey}`, error);
+    }
+  }
+
+  async enqueue(taskData, priority = 'normal', options = {}) {
+    const dedupeKey = options.dedupeKey;
+    const dedupeTtlSeconds = options.dedupeTtlSeconds;
+    if (dedupeKey) {
+      const acquired = await this._acquireDedupe(dedupeKey, dedupeTtlSeconds);
+      if (!acquired) {
+        logger.debug(`任务去重生效，跳过入队: ${this.queueName}, key=${dedupeKey}`);
+        return;
+      }
+    }
+
     const task = {
       id: this._generateTaskId(),
       data: taskData,
       priority,
       timestamp: Date.now(),
-      retries: 0
+      retries: 0,
+      dedupeKey
     };
 
     const queueKey = priority === 'high' 
       ? `vertex:queue:${this.queueName}:high`
       : `vertex:queue:${this.queueName}:normal`;
 
-    await exports.lpush(queueKey, JSON.stringify(task));
-    logger.debug(`任务已入队: ${this.queueName}, ID: ${task.id}`);
+    try {
+      await exports.lpush(queueKey, JSON.stringify(task));
+      logger.debug(`任务已入队: ${this.queueName}, ID: ${task.id}`);
+    } catch (error) {
+      if (dedupeKey) {
+        await this._releaseDedupe(dedupeKey);
+      }
+      throw error;
+    }
     
     // 触发处理
     this.processQueue();
@@ -119,6 +158,9 @@ class TaskQueue {
           // 记录最后的错误信息，用于死信队列
           task.lastError = error.message || error.toString();
         }).finally(() => {
+          if (task.dedupeKey) {
+            this._releaseDedupe(task.dedupeKey);
+          }
           this.activeWorkers--;
           // 继续处理队列
           setTimeout(() => this.processQueue(), 100);
