@@ -293,9 +293,6 @@ module.exports = function (app, express, router) {
   router.all('/openapi/:apiKey/wechat', ctrl.Webhook.wechat);
   router.all('/openapi/:apiKey/slack', ctrl.Webhook.slack);
 
-  router.all('/openapi/:apiKey/widget', ctrl.OpenApi.widget);
-  router.all('/openapi/:apiKey/siteInfo', ctrl.OpenApi.siteInfo);
-
   app.use('/api', router);
   app.use('/proxy/client/:client', clientProxy);
   app.use('/proxy/site/:site', siteProxy);

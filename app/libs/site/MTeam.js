@@ -109,7 +109,7 @@ class Site {
       torrent.leechers = +_torrent.status.leechers;
       torrent.snatches = +_torrent.status.timesCompleted;
       torrent.size = +_torrent.size;
-      torrent.time = moment(torrent.createdDate).unix();
+      torrent.time = moment(_torrent.createdDate).unix();
       torrent.tags = [];
       if (+_torrent.labels & 1) {
         torrent.tags.push('DIY');

@@ -70,14 +70,6 @@ class Douban {
     }
   };
 
-  async _searchRemoteTorrents (keyword) {
-    const ids = this.sites.map(i => global.runningSite[i].siteId).filter(item => item);
-    const result = (await util.requestPromise({
-      url: `https://dash.vertex-app.top/api/torrent/search?keyword=${encodeURIComponent(keyword)}&apiKey=${global.panelKey}&site=${JSON.stringify(ids)}`
-    })).body;
-    return result;
-  };
-
   async _getJson (url) {
     const cache = await redis.get(`vertex:douban:json:${url}`);
     if (!cache) {
@@ -801,30 +793,7 @@ class Douban {
     }
     let torrents = [];
     if (remote) {
-      logbinge(this.alias, '启动搜索任务, 搜索类型: 远程搜索', '影视:', wish.name, '关键词:', searchKey, '豆瓣ID', wish.id, 'imdb', wish.imdb);
-      const result = JSON.parse(await this._searchRemoteTorrents(searchKey));
-      if (result.success) {
-        torrents = result.data.map(item => {
-          return {
-            site: item.site,
-            sitePriority: global.runningSite[item.site]?.priority || 0,
-            title: item.title,
-            subtitle: item.subtitle,
-            category: item.category,
-            link: item.link,
-            id: item.id,
-            seeders: 999,
-            leechers: 999,
-            snatches: 999,
-            size: item.size,
-            time: item.time,
-            tags: (item.tags || '').split(',')
-          };
-        });
-      } else {
-        logger.error('远程请求种子失败:', result.message);
-        torrents = [];
-      }
+      torrents = [];
     } else {
       logbinge(this.alias, '启动搜索任务, 搜索类型:', imdb ? 'imdb' : '名称', wish.name, '影视:', wish.name, '豆瓣ID', wish.id, 'imdb', wish.imdb, '开始搜索以下站点', this.sites.join(', '));
       const result = await Promise.all(this.sites.map(i => global.runningSite[i].search(imdb ? wish.imdb : searchKey)));
