@@ -16,6 +16,10 @@ class ClientTaskQueue extends TaskQueue {
       flashFitTime: 60000
     };
 
+    this.activeClientTasks = new Map();
+    this.lowPriorityActions = new Set(['flashFitTime', 'record', 'autoReannounce']);
+    this.busyRetryDelayMs = 5000;
+
     // 客户端故障管理
     this.failedClients = new Map(); // clientId -> { count, lastFailTime, blocked }
     this.blockDuration = 2 * 60 * 1000; // 阻塞2分钟（快速响应，因为客户端查询频繁）
@@ -202,6 +206,10 @@ class ClientTaskQueue extends TaskQueue {
     return { dedupeKey: key, dedupeTtlSeconds: ttlSeconds };
   }
 
+  _isLowPriority(action) {
+    return this.lowPriorityActions.has(action);
+  }
+
   async enqueue(taskData, priority = 'normal') {
     const { clientId } = taskData;
     
@@ -255,6 +263,7 @@ class ClientTaskQueue extends TaskQueue {
 
   async executeTask(task) {
     const { clientId, action, params } = task.data;
+    let lockAcquired = false;
     
     try {
       // 再次检查阻塞状态
@@ -269,6 +278,23 @@ class ClientTaskQueue extends TaskQueue {
         return;
       }
 
+      const activeTask = this.activeClientTasks.get(clientId);
+      if (activeTask) {
+        if (this._isLowPriority(action)) {
+          logger.debug(`客户端 ${client.alias} 正在执行 ${activeTask.action}，跳过低优先级任务: ${action}`);
+          return;
+        }
+        logger.debug(`客户端 ${client.alias} 正在执行 ${activeTask.action}，延后任务: ${action}`);
+        setTimeout(() => {
+          this.enqueue(task.data, task.priority).catch(error => {
+            logger.error(`延后任务重新入队失败: ${client.alias}, 动作: ${action}`, error);
+          });
+        }, this.busyRetryDelayMs);
+        return;
+      }
+
+      this.activeClientTasks.set(clientId, { action, startTime: Date.now() });
+      lockAcquired = true;
       logger.debug(`开始执行客户端任务: ${client.alias}, 动作: ${action}`);
       const startTime = Date.now();
       
@@ -339,6 +365,10 @@ class ClientTaskQueue extends TaskQueue {
       
       // 不再重新抛出错误，让任务队列继续处理下一个任务
       logger.error(`客户端任务失败已处理: ${clientId}, 继续处理下一个任务`);
+    } finally {
+      if (lockAcquired && this.activeClientTasks.get(clientId)?.action === action) {
+        this.activeClientTasks.delete(clientId);
+      }
     }
   }
 
