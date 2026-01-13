@@ -836,10 +836,14 @@ class Client {
   // 调度适配时间刷新任务
   async scheduleFlashFitTime(rule) {
     try {
+      const ruleSnapshot = { ...rule };
+      if (ruleSnapshot.fitTimeJob) {
+        delete ruleSnapshot.fitTimeJob;
+      }
       await this.taskQueue.enqueue({
         clientId: this.id,
         action: 'flashFitTime',
-        params: { rule }
+        params: { rule: ruleSnapshot }
       });
     } catch (error) {
       logger.error(`调度适配时间刷新任务失败: ${this.alias}`, error);
