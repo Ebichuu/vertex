@@ -1,7 +1,6 @@
 const moment = require('moment');
 const logger = require('../logger');
 const util = require('../util');
-const path = require('path');
 
 class Slack {
   constructor (slack) {
@@ -11,8 +10,7 @@ class Slack {
   };
 
   async pushSlack (title, desp, poster) {
-    let _poster = poster || global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
-    _poster = `https://image.vertex-app.top/api/image/cut/0.425/${path.basename(_poster)}/${encodeURIComponent(_poster)}`;
+    const _poster = poster || global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
     const option = {
       url: this.slackWebhook,
       method: 'POST',
@@ -346,8 +344,7 @@ class Slack {
     if (payload.Metadata.summary) {
       text += `*简介:* ${payload.Metadata.summary}`;
     }
-    let _poster = global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
-    _poster = `https://image.vertex-app.top/api/image/cut/0.425/${path.basename(_poster)}/${encodeURIComponent(_poster)}`;
+    const _poster = global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
     const option = {
       url: this.slackWebhook,
       method: 'POST',
@@ -429,8 +426,7 @@ class Slack {
     } else {
       text += '*简介:* 暂无';
     }
-    let _poster = global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
-    _poster = `https://image.vertex-app.top/api/image/cut/0.425/${path.basename(_poster)}/${encodeURIComponent(_poster)}`;
+    const _poster = global.wechatCover || 'https://pic.lswl.in/images/2022/07/11/bf4eabf1afa841f4527db4d207d265c3.png';
     const option = {
       url: this.slackWebhook,
       method: 'POST',

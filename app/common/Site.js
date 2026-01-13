@@ -134,24 +134,6 @@ class Site {
       logger.error(e);
       throw new Error(this.site + ' 站点数据抓取失败 (疑似是 Cookie 失效, 或绕过 CloudFlare 5s 盾失效)');
     }
-    if (this.pullRemoteTorrent && global.panelKey) {
-      const res = await util.requestPromise({
-        url: 'https://dash.vertex-app.top/api/user/activatingSite',
-        method: 'POST',
-        json: {
-          apiKey: global.panelKey,
-          siteId: this.siteId
-        }
-      });
-      try {
-        const resStatus = res.body.success;
-        if (!resStatus) {
-          logger.error('激活站点失败: ', res.body);
-        }
-      } catch (e) {
-        logger.error(res.body);
-      }
-    }
   };
 
   async search (keyword) {

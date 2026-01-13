@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const path = require('path');
 const util = require('../libs/util');
 const redis = require('../libs/redis');
 const logger = require('../libs/logger');
@@ -254,7 +253,7 @@ const getSelectMediaRaw = function (result, douban) {
   for (const r of result) {
     list.push({
       type: 'image',
-      image_url: `https://image.vertex-app.top/api/image/cut/0.425/${path.basename(r.poster)}/${encodeURIComponent(r.poster)}`,
+      image_url: r.poster,
       alt_text: r.title
     });
     list.push({

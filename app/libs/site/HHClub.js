@@ -47,7 +47,7 @@ class Site {
       torrent.id = +torrent.link.match(/id=(\d*)/)[1];
       torrent.seeders = +(_torrent.querySelectorAll('.torrent-info-text > a')[0]?.innerHTML || _torrent.querySelectorAll('.torrent-info-text')[2].innerHTML).trim().replace(',', '');
       torrent.leechers = +(_torrent.querySelectorAll('.torrent-info-text > a')[1]?.innerHTML || _torrent.querySelectorAll('.torrent-info-text')[3].innerHTML).trim().replace(',', '');
-      torrent.snatches = +(_torrent.querySelectorAll('.torrent-info-text')[4].innerHTML).trim().replace(',', '');
+      torrent.snatches = +(_torrent.querySelectorAll('.torrent-info-text > a')[2]?.innerHTML || _torrent.querySelectorAll('.torrent-info-text')[4].innerHTML).trim().replace(',', '');
       torrent.size = _torrent.querySelectorAll('.torrent-info-text')[0].innerHTML.trim().replace('<br>', ' ').replace(/([KMGPT])B/, '$1iB');
       torrent.time = moment(_torrent.querySelectorAll('.torrent-info-text > span')[0].title.trim().replace(',', '')).unix();
       torrent.size = util.calSize(...torrent.size.split(' '));
