@@ -80,6 +80,7 @@ class Client {
     this.messageId = 0;
     this.errorCount = 0;
     this.trackerStatus = {};
+    this.lastTrackerSyncTime = 0;
     this.pausedTorrentHashes = [];
     this.getMaindata();
     this.avgUploadSpeed = 0;
@@ -551,6 +552,19 @@ class Client {
   async autoDelete () {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
     this.deleteRuleExecutionId++;
+    const needTrackerStatus = this._client.type === 'qBittorrent' &&
+      this.deleteRules.some(rule => rule.type === 'javascript' && typeof rule.code === 'string' && rule.code.includes('trackerStatus'));
+    if (needTrackerStatus) {
+      const now = moment().unix();
+      const minInterval = 5 * 60;
+      if (!this.lastTrackerSyncTime || now - this.lastTrackerSyncTime >= minInterval) {
+        logger.debug(`下载器 ${this.alias} 开始刷新 tracker 状态以支持站点删种规则`);
+        await this.trackerSync();
+      }
+      for (const torrent of this.maindata.torrents) {
+        torrent.trackerStatus = this.trackerStatus[torrent.hash] || torrent.trackerStatus || '';
+      }
+    }
     const torrents = this.maindata.torrents.sort((a, b) =>
       (a.completedTime <= 0 ? moment().unix() : a.completedTime) - (b.completedTime <= 0 ? moment().unix() : b.completedTime) ||
         a.addedTime - b.addedTime);
@@ -696,6 +710,7 @@ class Client {
         logger.error('下载器', this.alias, '种子', torrent.name, 'tracker 状态同步失败, 报错如下:\n', e);
       }
     }
+    this.lastTrackerSyncTime = moment().unix();
     if (syncCount > 0) {
       logger.info(`下载器 ${this.alias} tracker同步完成: ${syncCount}/${torrents.length} 个种子`);
     }

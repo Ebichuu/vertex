@@ -9,7 +9,7 @@ class ClientTaskQueue extends TaskQueue {
     
     this.actionTimeoutMs = {
       getMaindata: 30000,
-      autoDelete: 180000,
+      autoDelete: 300000,
       trackerSync: 300000,
       autoReannounce: 60000,
       record: 120000,
@@ -17,7 +17,7 @@ class ClientTaskQueue extends TaskQueue {
     };
 
     this.activeClientTasks = new Map();
-    this.lowPriorityActions = new Set(['flashFitTime', 'record', 'autoReannounce']);
+    this.lowPriorityActions = new Set(['record', 'autoReannounce']);
     this.busyRetryDelayMs = 5000;
 
     // 客户端故障管理
