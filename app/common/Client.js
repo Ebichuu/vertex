@@ -81,6 +81,8 @@ class Client {
     this.errorCount = 0;
     this.trackerStatus = {};
     this.lastTrackerSyncTime = 0;
+    this.trackerSyncCursor = 0;
+    this.trackerSyncBatchSize = client.trackerSyncBatchSize || 50;
     this.pausedTorrentHashes = [];
     this.getMaindata();
     this.avgUploadSpeed = 0;
@@ -686,8 +688,16 @@ class Client {
       return;
     }
     const torrents = this.maindata.torrents;
+    const total = torrents.length;
+    const batchSize = Math.min(this.trackerSyncBatchSize || 50, total);
+    const batch = [];
+    for (let i = 0; i < batchSize; i++) {
+      const index = (this.trackerSyncCursor + i) % total;
+      batch.push(torrents[index]);
+    }
+    this.trackerSyncCursor = (this.trackerSyncCursor + batch.length) % total;
     let syncCount = 0;
-    for (const torrent of torrents) {
+    for (const torrent of batch) {
       try {
         if (await redis.get(`vertex:torrent_tracker:${torrent.hash}`)) continue;
         const sqlRes = await util.getRecord('SELECT * FROM torrents WHERE hash = ?', [torrent.hash]);
@@ -712,7 +722,7 @@ class Client {
     }
     this.lastTrackerSyncTime = moment().unix();
     if (syncCount > 0) {
-      logger.info(`下载器 ${this.alias} tracker同步完成: ${syncCount}/${torrents.length} 个种子`);
+      logger.info(`下载器 ${this.alias} tracker同步完成: ${syncCount}/${batch.length} 个种子 (总数: ${total})`);
     }
   };
 
