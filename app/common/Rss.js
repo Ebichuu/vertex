@@ -17,6 +17,8 @@ class Rss {
     this.id = rss.id;
     this.maxSleepTime = rss.maxSleepTime;
     this.lastRssTime = 0;
+    this.lastRssTimeKey = `vertex:rss:last_time:${this.id}`;
+    this.lastRssTimeReady = this._loadLastRssTime();
     this.alias = rss.alias;
     this.urls = rss.rssUrls;
     this.clientArr = rss.clientArr || [rss.client];
@@ -66,6 +68,31 @@ class Rss {
       this.clearCount = cron.schedule('0 * * * *', () => this.scheduleClearCount());
       
       logger.info('Rss 任务', this.alias, '初始化完毕');
+    }
+  }
+
+  async _loadLastRssTime () {
+    if (!this.lastRssTimeKey) return;
+    try {
+      const stored = await redis.get(this.lastRssTimeKey);
+      const parsed = Number(stored);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        this.lastRssTime = parsed;
+        logger.info(this.alias, `加载上次RSS执行时间: ${moment.unix(parsed).format('YYYY-MM-DD HH:mm:ss')}`);
+      }
+    } catch (error) {
+      logger.error(this.alias, '加载上次RSS执行时间失败:', error);
+    }
+  }
+
+  async _persistLastRssTime (timestamp) {
+    if (!this.lastRssTimeKey) return;
+    if (!Number.isFinite(timestamp)) return;
+    this.lastRssTime = timestamp;
+    try {
+      await redis.set(this.lastRssTimeKey, String(timestamp));
+    } catch (error) {
+      logger.error(this.alias, '持久化RSS执行时间失败:', error);
     }
   }
 
@@ -516,6 +543,10 @@ class Rss {
   }
 
   async rss (_torrents) {
+    if (this.lastRssTimeReady) {
+      await this.lastRssTimeReady;
+      this.lastRssTimeReady = null;
+    }
     const startTime = moment();
     logger.debug(this.alias, 'RSS任务开始执行');
     
@@ -523,8 +554,29 @@ class Rss {
     if (_torrents) {
       torrents = _torrents;
     } else {
-      // 从多个URL获取种子并合并
-      torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url)))).flat();
+      // 从多个URL获取种子并合并，单个源失败不中断整体
+      const results = await Promise.allSettled(this.urls.map(url => rss.getTorrents(url)));
+      const failedUrls = [];
+      let successCount = 0;
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        if (result.status === 'fulfilled') {
+          successCount += 1;
+          torrents.push(...result.value);
+        } else {
+          failedUrls.push({ url: this.urls[i], error: result.reason });
+        }
+      }
+      if (failedUrls.length > 0) {
+        for (const item of failedUrls) {
+          logger.error(this.alias, `RSS源获取失败: ${item.url}`, item.error);
+        }
+      }
+      if (successCount === 0) {
+        const error = new Error('RSS获取失败: 所有源均失败');
+        logger.error(this.alias, error.message);
+        throw error;
+      }
       
       // 根据hash去重，防止不同URL源提供相同种子
       const uniqueTorrents = [];
@@ -542,12 +594,28 @@ class Rss {
     
     // 过滤掉已处理和被冻结的种子和超过每小时推送上限的种子
     let newTorrents = [];
+
+    const existingHashes = new Set();
+    const hashList = Array.from(new Set(torrents.map(item => item.hash).filter(Boolean)));
+    if (hashList.length > 0) {
+      const batchSize = 300;
+      for (let i = 0; i < hashList.length; i += batchSize) {
+        const batch = hashList.slice(i, i + batchSize);
+        const placeholders = batch.map(() => '?').join(',');
+        const rows = await util.getRecords(
+          `SELECT hash FROM torrents WHERE rss_id = ? AND hash IN (${placeholders})`,
+          [this.id, ...batch]
+        );
+        for (const row of rows) {
+          existingHashes.add(row.hash);
+        }
+      }
+    }
     
     // 过滤种子
     for (const torrent of torrents) {
       // 检查是否在数据库中已存在
-      const sqlRes = await util.getRecord('SELECT * FROM torrents WHERE hash = ? AND rss_id = ?', [torrent.hash, this.id]);
-      if (sqlRes && sqlRes.id) continue;
+      if (torrent.hash && existingHashes.has(torrent.hash)) continue;
       // 检查是否被冻结
       if (torrent.name.indexOf('[FROZEN]') !== -1) continue;
       
@@ -571,7 +639,7 @@ class Rss {
     
     // 如果没有有效种子，直接返回
     if (newTorrents.length === 0) {
-      this.lastRssTime = moment().unix();
+      await this._persistLastRssTime(moment().unix());
       return;
     }
     
@@ -641,12 +709,15 @@ class Rss {
     
     // 检查最长休眠时间
     if (moment().unix() - this.lastRssTime > +this.maxSleepTime) {
+      const nowTime = moment().unix();
+      const sleepSeconds = nowTime - this.lastRssTime;
+      logger.warn(this.alias, `触发最长休眠时间拒绝: 休眠 ${sleepSeconds}s, 阈值 ${this.maxSleepTime}s, 上次执行 ${this.lastRssTime}, 待处理 ${newTorrents.length}`);
       for (const torrent of newTorrents) {
         await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
           [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 最长休眠时间']);
         await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 最长休眠时间');
       }
-      this.lastRssTime = moment().unix();
+      await this._persistLastRssTime(nowTime);
       return;
     }
     
@@ -1208,7 +1279,7 @@ class Rss {
     await Promise.all(allProcessingTasks);
     logger.info(this.alias, `RSS任务并行处理完成，共处理 ${newTorrents.length} 个种子`);
     
-    this.lastRssTime = moment().unix();
+    await this._persistLastRssTime(moment().unix());
   }
 
   async dryrun () {
