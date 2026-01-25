@@ -137,6 +137,25 @@ class Rss {
     }
   }
 
+  async _batchRejectTorrents (torrents, reason) {
+    if (!torrents || torrents.length === 0) return;
+    const nowTime = moment().unix();
+    const rows = torrents.map((torrent) => [
+      torrent.hash,
+      torrent.name,
+      torrent.size,
+      this.id,
+      torrent.link,
+      nowTime,
+      2,
+      reason
+    ]);
+    await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)', rows);
+    for (const torrent of torrents) {
+      await this.ntf.rejectTorrent(this._rss, undefined, torrent, reason);
+    }
+  }
+
   _all (str, keys) {
     if (!keys || keys.length === 0) return true;
     for (const key of keys) {
@@ -711,11 +730,7 @@ class Rss {
     // 将"无可用下载器"判断移至过滤后，只对需要处理的种子记录错误
     if (availableClients.length === 0) {
       logger.error(this.alias, '无可用下载器');
-      for (const torrent of newTorrents) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 无可用下载器']);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 无可用下载器');
-      }
+      await this._batchRejectTorrents(newTorrents, '拒绝原因: 无可用下载器');
       return;
     }
 
@@ -725,11 +740,7 @@ class Rss {
     if (lastAttemptTime && nowTime - lastAttemptTime > +this.maxSleepTime) {
       const sleepSeconds = nowTime - lastAttemptTime;
       logger.warn(this.alias, `触发最长休眠时间拒绝: 休眠 ${sleepSeconds}s, 阈值 ${this.maxSleepTime}s, 上次尝试 ${lastAttemptTime}, 待处理 ${newTorrents.length}`);
-      for (const torrent of newTorrents) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 最长休眠时间']);
-        await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 最长休眠时间');
-      }
+      await this._batchRejectTorrents(newTorrents, '拒绝原因: 最长休眠时间');
       await this._persistLastRssTime(nowTime);
       await this._persistLastAttemptTime(nowTime);
       return;
@@ -748,11 +759,7 @@ class Rss {
       if (allowed < newTorrents.length) {
         const acceptableTorrents = newTorrents.slice(0, allowed);
         const rejectedTorrents = newTorrents.slice(allowed);
-        for (const torrent of rejectedTorrents) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`]);
-          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`);
-        }
+        await this._batchRejectTorrents(rejectedTorrents, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`);
         logger.info(this.alias, `每小时推送上限为 ${limit}，当前已推送 ${usedBefore}，本次接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
         newTorrents = acceptableTorrents;
       } else {

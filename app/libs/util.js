@@ -185,6 +185,19 @@ exports.runRecord = async function (sql, options = []) {
   return db.prepare(sql).run(...options);
 };
 
+exports.runRecords = async function (sql, rows = []) {
+  if (!rows || rows.length === 0) {
+    return;
+  }
+  const stmt = db.prepare(sql);
+  const trx = db.transaction((items) => {
+    for (const row of items) {
+      stmt.run(...row);
+    }
+  });
+  return trx(rows);
+};
+
 exports.getRecord = async function (sql, options = []) {
   let _sql = sql;
   if (options) {
