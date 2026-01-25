@@ -50,6 +50,7 @@ exports.lrange = util.promisify(client.lrange).bind(client);
 exports.lrem = util.promisify(client.lrem).bind(client);
 exports.publish = util.promisify(client.publish).bind(client);
 exports.expire = util.promisify(client.expire).bind(client);
+exports.eval = util.promisify(client.eval).bind(client);
 
 // 队列工具类
 class TaskQueue {

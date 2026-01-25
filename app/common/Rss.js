@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
 const RssTaskQueue = require('../libs/queues/RssTaskQueue');
+const rateLimiter = require('../libs/rate-limiter');
 const Push = require('./Push');
 
 class Rss {
@@ -22,6 +23,8 @@ class Rss {
     this.lastAttemptTime = 0;
     this.lastAttemptTimeKey = `vertex:rss:last_attempt:${this.id}`;
     this.lastAttemptTimeReady = this._loadLastAttemptTime();
+    this.rateLimitKey = `vertex:rss:rate:${this.id}`;
+    this.rateLimitResetReady = this._resetRateLimitCounter();
     this.alias = rss.alias;
     this.urls = rss.rssUrls;
     this.clientArr = rss.clientArr || [rss.client];
@@ -121,6 +124,16 @@ class Rss {
       await redis.set(this.lastAttemptTimeKey, String(timestamp));
     } catch (error) {
       logger.error(this.alias, '持久化RSS尝试时间失败:', error);
+    }
+  }
+
+  async _resetRateLimitCounter () {
+    if (!this.rateLimitKey) return;
+    try {
+      await rateLimiter.reset(this.rateLimitKey);
+      logger.info(this.alias, '已重置RSS推送限流计数');
+    } catch (error) {
+      logger.error(this.alias, '重置RSS推送限流计数失败:', error);
     }
   }
 
@@ -579,6 +592,10 @@ class Rss {
       await this.lastAttemptTimeReady;
       this.lastAttemptTimeReady = null;
     }
+    if (this.rateLimitResetReady) {
+      await this.rateLimitResetReady;
+      this.rateLimitResetReady = null;
+    }
     const startTime = moment();
     logger.debug(this.alias, 'RSS任务开始执行');
     
@@ -702,43 +719,6 @@ class Rss {
       return;
     }
 
-    // 检查每小时推送上限
-    if (this.addCount + newTorrents.length > this.addCountPerHour) {
-      // 计算可接受的种子数量和需要拒绝的种子数量
-      const acceptableCount = this.addCountPerHour - this.addCount;
-      
-      // 如果有可接受的种子，则按大小排序，优先处理大种子
-      if (acceptableCount > 0) {
-        // 对种子按大小排序（从大到小）
-        newTorrents.sort((a, b) => +b.size - +a.size);
-        
-        // 分割为可接受的和需要拒绝的
-        const acceptableTorrents = newTorrents.slice(0, acceptableCount);
-        const rejectedTorrents = newTorrents.slice(acceptableCount);
-        
-        // 记录被拒绝的种子
-        for (const torrent of rejectedTorrents) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
-          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
-        }
-        
-        // 继续处理可接受的种子
-        logger.info(this.alias, `每小时推送上限为 ${this.addCountPerHour}，当前已推送 ${this.addCount}，本次接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
-        
-        // 更新newTorrents为可接受的种子列表，继续后续处理
-        newTorrents = acceptableTorrents;
-      } else {
-        // 如果没有可接受的种子（已达上限），拒绝所有种子
-        for (const torrent of newTorrents) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`]);
-          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${this.addCount} / ${this.addCountPerHour}`);
-        }
-        return;
-      }
-    }
-    
     // 检查最长休眠时间
     const nowTime = moment().unix();
     const lastAttemptTime = this.lastAttemptTime && this.lastAttemptTime > 0 ? this.lastAttemptTime : this.lastRssTime;
@@ -753,6 +733,34 @@ class Rss {
       await this._persistLastRssTime(nowTime);
       await this._persistLastAttemptTime(nowTime);
       return;
+    }
+
+    // 检查每小时推送上限（Redis滑动窗口）
+    if (this.addCountPerHour > 0) {
+      const limit = Number(this.addCountPerHour);
+      const key = this.rateLimitKey;
+      // 按大小排序（从大到小），优先接受大种子
+      newTorrents.sort((a, b) => +b.size - +a.size);
+      const consumeResult = await rateLimiter.consume(key, limit, 3600, newTorrents.length);
+      const allowed = Math.max(0, consumeResult.allowed);
+      const remainingBefore = consumeResult.remaining + allowed;
+      const usedBefore = limit - remainingBefore;
+      if (allowed < newTorrents.length) {
+        const acceptableTorrents = newTorrents.slice(0, allowed);
+        const rejectedTorrents = newTorrents.slice(allowed);
+        for (const torrent of rejectedTorrents) {
+          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
+            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`]);
+          await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`);
+        }
+        logger.info(this.alias, `每小时推送上限为 ${limit}，当前已推送 ${usedBefore}，本次接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
+        newTorrents = acceptableTorrents;
+      } else {
+        logger.info(this.alias, `每小时推送上限为 ${limit}，当前已推送 ${usedBefore}，本次接受 ${allowed} 个种子`);
+      }
+      if (newTorrents.length === 0) {
+        return;
+      }
     }
     
     // 智能分配种子到下载器
