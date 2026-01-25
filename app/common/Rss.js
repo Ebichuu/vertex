@@ -385,6 +385,52 @@ class Rss {
   }
 
   async _pushTorrent (torrent, _client) {
+    const records = { noteRows: [], noteCategoryRows: [], addRows: [] };
+    const pushNoteRow = (target, reason, recordType = 2) => {
+      const nowTime = moment().unix();
+      records.noteRows.push([
+        target.hash,
+        target.name,
+        target.size,
+        this.id,
+        target.link,
+        nowTime,
+        recordType,
+        reason
+      ]);
+    };
+    const pushNoteCategoryRow = (target, reason, recordType = 2, categoryValue) => {
+      const nowTime = moment().unix();
+      const resolvedCategory = categoryValue !== undefined ? categoryValue : this.category;
+      records.noteCategoryRows.push([
+        target.hash,
+        target.name,
+        target.size,
+        this.id,
+        target.link,
+        resolvedCategory,
+        nowTime,
+        recordType,
+        reason
+      ]);
+    };
+    const pushAddRow = (hashValue, target, categoryValue, note = '添加种子') => {
+      const nowTime = moment().unix();
+      const resolvedCategory = categoryValue !== undefined ? categoryValue : this.category;
+      records.addRows.push([
+        hashValue,
+        target.name,
+        target.size,
+        this.id,
+        target.link,
+        resolvedCategory,
+        nowTime,
+        nowTime,
+        1,
+        note
+      ]);
+    };
+
     if (this.autoReseed && torrent.hash.indexOf('fakehash') === -1) {
       for (const key of this.reseedClients) {
         const client = global.runningClient[key];
@@ -399,14 +445,12 @@ class Rss {
               try {
                 this.addCount += 1;
                 await client.addTorrent(torrent.url, torrent.hash, true, this.uploadLimit, this.downloadLimit, _torrent.savePath, this.category);
-                await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, category, link, record_time, add_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                  [torrent.hash, torrent.name, torrent.size, this.id, this.category, torrent.link, moment().unix(), moment().unix(), 1, '辅种']);
+                pushAddRow(torrent.hash, torrent, this.category, '辅种');
                 await this.ntf.addTorrent(this._rss, client, torrent);
-                return;
+                return records;
               } catch (error) {
                 logger.error(this.alias, '下载器', client, '添加种子', torrent.name, '失败\n', error);
-                await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, category, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                  [torrent.hash, torrent.name, torrent.size, this.id, this.category, torrent.link, moment().unix(), 3, '辅种失败']);
+                pushNoteCategoryRow(torrent, '辅种失败', 3, this.category);
                 await this.ntf.addTorrentError(this._rss, client, torrent);
               }
             }
@@ -428,36 +472,31 @@ class Rss {
         };
       }
       if (_client.maxUploadSpeed && speed.uploadSpeed > _client.maxUploadSpeed) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 超过下载器最大上传速度 ${util.formatSize(speed.uploadSpeed)}/s`]);
+        pushNoteRow(torrent, `拒绝原因: 超过下载器最大上传速度 ${util.formatSize(speed.uploadSpeed)}/s`);
         await this.ntf.rejectTorrent(this._rss, _client, torrent, `拒绝原因: 超过下载器最大上传速度 ${util.formatSize(speed.uploadSpeed)}/s`);
-        return;
+        return records;
       }
       if (_client.maxDownloadSpeed && speed.downloadSpeed > _client.maxDownloadSpeed) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 超过下载器最大下载速度 ${util.formatSize(speed.downloadSpeed)}/s`]);
+        pushNoteRow(torrent, `拒绝原因: 超过下载器最大下载速度 ${util.formatSize(speed.downloadSpeed)}/s`);
         await this.ntf.rejectTorrent(this._rss, _client, torrent, `拒绝原因: 超过下载器最大下载速度 ${util.formatSize(speed.downloadSpeed)}/s`);
-        return;
+        return records;
       }
       const leechNum = _client.maindata.leechingCount;
       if (_client.maxLeechNum && leechNum >= _client.maxLeechNum) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 超过下载器最大下载数量 ${leechNum}`]);
+        pushNoteRow(torrent, `拒绝原因: 超过下载器最大下载数量 ${leechNum}`);
         await this.ntf.rejectTorrent(this._rss, _client, torrent, `拒绝原因: 超过下载器最大下载数量 ${leechNum}`);
-        return;
+        return records;
       }
       if (_client.minFreeSpace && _client.maindata.freeSpaceOnDisk <= _client.minFreeSpace) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 低于下载器最小剩余空间 ${util.formatSize(_client.maindata.freeSpaceOnDisk)}`]);
+        pushNoteRow(torrent, `拒绝原因: 低于下载器最小剩余空间 ${util.formatSize(_client.maindata.freeSpaceOnDisk)}`);
         await this.ntf.rejectTorrent(this._rss, _client, torrent, `拒绝原因: 低于下载器最小剩余空间 ${util.formatSize(_client.maindata.freeSpaceOnDisk)}`);
-        return;
+        return records;
       }
       const fitRules = this.acceptRules.filter(item => this._fitRule(item, torrent));
       if (fitRules.length === 0 && this.acceptRules.length !== 0) {
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 不符合所有规则']);
+        pushNoteRow(torrent, '拒绝原因: 不符合所有规则');
         await this.ntf.rejectTorrent(this._rss, _client, torrent, '拒绝原因: 不符合所有规则');
-        return;
+        return records;
       }
       if (this.scrapeFree) {
         try {
@@ -467,34 +506,30 @@ class Rss {
               logger.info(this.alias, '已设置等待时间', this.sleepTime, ', ', torrent.name, '发布时间为', moment(torrent.pubTime * 1000).format('YYYY-MM-DD HH:mm:ss'), ', 跳过');
               await redis.setWithExpire(`vertex:scrape:free:${torrent.hash}`, '7777', 3600 * 4);
             } else {
-              await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 非免费种']);
+              pushNoteRow(torrent, '拒绝原因: 非免费种');
             }
             await this.ntf.rejectTorrent(this._rss, _client, torrent, '拒绝原因: 非免费种');
-            return;
+            return records;
           }
         } catch (e) {
           logger.error(this.alias, '抓取免费种子失败: ', e.message);
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 抓取免费种子失败 ${e.message}`]);
+          pushNoteRow(torrent, `拒绝原因: 抓取免费种子失败 ${e.message}`);
           await this.ntf.scrapeError(this._rss, torrent);
-          return;
+          return records;
         }
       }
       if (this.scrapeHr) {
         try {
           if (await util.scrapeHr(torrent.link, this.cookie)) {
-            await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-              [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: HR']);
+            pushNoteRow(torrent, '拒绝原因: HR');
             await this.ntf.rejectTorrent(this._rss, _client, torrent, '拒绝原因: HR');
-            return;
+            return records;
           }
         } catch (e) {
           logger.error(this.alias, '抓取 HR 种子失败: ', e.message);
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝原因: 抓取 HR 种子失败 ${e.message}`]);
+          pushNoteRow(torrent, `拒绝原因: 抓取 HR 种子失败 ${e.message}`);
           await this.ntf.scrapeError(this._rss, torrent);
-          return;
+          return records;
         }
       }
       let fitRule = {};
@@ -514,10 +549,9 @@ class Rss {
         // 1. 首先检查Redis缓存中是否存在相同种子（按特定客户端）
         const existCheck = await this.checkTorrentExistsInClient(client.id, torrent);
         if (existCheck && existCheck.exists) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, existCheck.reason]);
+          pushNoteRow(torrent, existCheck.reason);
           await this.ntf.rejectTorrent(this._rss, client, torrent, existCheck.reason);
-          return;
+          return records;
         }
         
         // 2. 检查数据库中是否有相同哈希的种子（仅检查哈希完全匹配 - 10分钟内）
@@ -529,10 +563,9 @@ class Rss {
         
         if (sameTorrent && sameTorrent.id) {
           const reason = '拒绝原因: 种子已添加过';
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, reason]);
+          pushNoteRow(torrent, reason);
           await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
-          return;
+          return records;
         }
         
         // 3. 作为后备，检查最终选定的客户端中是否有相同大小的种子
@@ -543,10 +576,9 @@ class Rss {
               await this.cacheTorrentToClient(client.id, _torrent);
               
               const reason = '拒绝原因: 下载器中已存在同大小种子';
-              await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, reason]);
+              pushNoteRow(torrent, reason);
               await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
-              return;
+              return records;
             }
           }
         }
@@ -583,23 +615,23 @@ class Rss {
         } catch (e) {
           logger.error('通知信息发送失败: \n', e);
         }
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, category, moment().unix(), moment().unix(), 1, '添加种子']);
+        pushAddRow(torrent.hash, torrent, category, '添加种子');
         if (truehash && torrent.hash !== truehash) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [truehash, torrent.name, torrent.size, this.id, torrent.link, category, moment().unix(), moment().unix(), 1, '添加种子']);
+          pushAddRow(truehash, torrent, category, '添加种子');
         }
+        return records;
       } catch (error) {
         logger.error(this.alias, '下载器', client.alias, '添加种子失败:', error.message);
-        await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-          [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 3, '添加种子失败']);
+        pushNoteRow(torrent, '添加种子失败', 3);
         try {
           await this.ntf.addTorrentError(this._rss, client, torrent);
         } catch (e) {
           logger.error('通知信息发送失败: \n', e);
         }
+        return records;
       }
     }
+    return records;
   }
 
   async rss (_torrents) {
@@ -681,6 +713,7 @@ class Rss {
     }
     
     // 过滤种子
+    const rejectedRuleRows = [];
     for (const torrent of torrents) {
       // 检查是否在数据库中已存在
       if (torrent.hash && existingHashes.has(torrent.hash)) continue;
@@ -691,8 +724,16 @@ class Rss {
       let reject = false;
       for (const rejectRule of this.rejectRules) {
         if (this._fitRule(rejectRule, torrent)) {
-          await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-            [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, `拒绝规则: ${rejectRule.alias}`]);
+          rejectedRuleRows.push([
+            torrent.hash,
+            torrent.name,
+            torrent.size,
+            this.id,
+            torrent.link,
+            moment().unix(),
+            2,
+            `拒绝规则: ${rejectRule.alias}`
+          ]);
           await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝规则: ${rejectRule.alias}`);
           reject = true;
           break;
@@ -701,6 +742,9 @@ class Rss {
       if (reject) continue;
       
       newTorrents.push(torrent);
+    }
+    if (rejectedRuleRows.length > 0) {
+      await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)', rejectedRuleRows);
     }
     
     logger.debug(this.alias, `种子过滤完成，耗时: ${moment().diff(startTime, 'seconds')}秒，有效数量: ${newTorrents.length}`);
@@ -1300,6 +1344,9 @@ class Rss {
     // 处理每个下载器的种子分配（并行处理）
     const allProcessingTasks = [];
     const maxConcurrent = 15; // 每个客户端的最大并发处理数量
+    const insertNoteSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)';
+    const insertNoteWithCategorySql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const insertAddSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
     
     for (const clientId in clientAssignments) {
       const client = global.runningClient[clientId];
@@ -1307,14 +1354,38 @@ class Rss {
       
       // 对每个下载器的种子进行分批并行处理
       const processBatch = async (torrents) => {
-        return Promise.all(torrents.map(async (torrent) => {
+        const results = await Promise.all(torrents.map(async (torrent) => {
           try {
-            // 处理种子
-            await this._pushTorrent(torrent, client);
+            return await this._pushTorrent(torrent, client);
           } catch (error) {
             logger.error(this.alias, `处理种子 ${torrent.name} 时出错:`, error);
+            return null;
           }
         }));
+        const noteRows = [];
+        const noteCategoryRows = [];
+        const addRows = [];
+        for (const result of results) {
+          if (!result) continue;
+          if (result.noteRows && result.noteRows.length > 0) {
+            noteRows.push(...result.noteRows);
+          }
+          if (result.noteCategoryRows && result.noteCategoryRows.length > 0) {
+            noteCategoryRows.push(...result.noteCategoryRows);
+          }
+          if (result.addRows && result.addRows.length > 0) {
+            addRows.push(...result.addRows);
+          }
+        }
+        if (noteRows.length > 0) {
+          await util.runRecords(insertNoteSql, noteRows);
+        }
+        if (noteCategoryRows.length > 0) {
+          await util.runRecords(insertNoteWithCategorySql, noteCategoryRows);
+        }
+        if (addRows.length > 0) {
+          await util.runRecords(insertAddSql, addRows);
+        }
       };
       
       // 将客户端的种子分批处理
