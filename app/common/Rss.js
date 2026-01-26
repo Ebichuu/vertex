@@ -1045,6 +1045,7 @@ class Rss {
           
           // 合并已分配种子到跳过列表
           const skippedTorrents = [];
+          const rejectedNoSpace = [];
           
           // 先尝试分配到首选客户端
           for (const torrent of normalBwTorrents) {
@@ -1087,9 +1088,7 @@ class Rss {
               if (eligibleClients.length === 0) {
                 // 记录无法分配的种子
                 logger.warn(this.alias, `种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 无法分配，所有下载器空间不足`);
-                await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                  [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 所有下载器空间不足']);
-                await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 所有下载器空间不足');
+                rejectedNoSpace.push(torrent);
                 continue;
               }
               
@@ -1108,10 +1107,11 @@ class Rss {
             // 记录所有无法分配的种子
             for (const torrent of skippedTorrents) {
               logger.warn(this.alias, `种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 无法分配，所有下载器空间不足`);
-              await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)',
-                [torrent.hash, torrent.name, torrent.size, this.id, torrent.link, moment().unix(), 2, '拒绝原因: 所有下载器空间不足']);
-              await this.ntf.rejectTorrent(this._rss, undefined, torrent, '拒绝原因: 所有下载器空间不足');
+              rejectedNoSpace.push(torrent);
             }
+          }
+          if (rejectedNoSpace.length > 0) {
+            await this._batchRejectTorrents(rejectedNoSpace, '拒绝原因: 所有下载器空间不足');
           }
         }
       };
