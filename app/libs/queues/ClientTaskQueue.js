@@ -31,6 +31,11 @@ class ClientTaskQueue {
     this.failedClients = new Map();
     this.blockDuration = 2 * 60 * 1000;
     this.maxFailuresBeforeBlock = 5;
+    this.circuitBreaker = {
+      quickFailWindowMs: 2 * 60 * 1000,
+      quickFailThreshold: 10,
+      halfOpenSuccessThreshold: 1
+    };
 
     this.fastActions = new Set(['getMaindata', 'flashFitTime']);
     this.slowActions = new Set(['autoDelete', 'trackerSync', 'record', 'autoReannounce']);
@@ -75,65 +80,102 @@ class ClientTaskQueue {
     return now - client.lastTrackerSyncTime >= this.trackerSyncUrgentInterval;
   }
 
+  _getOrCreateClientInfo(clientId) {
+    let info = this.failedClients.get(clientId);
+    if (!info) {
+      info = {
+        state: 'CLOSED',
+        count: 0,
+        lastFailTime: 0,
+        blocked: false,
+        blockedAt: 0,
+        openUntil: 0,
+        quickFailures: [],
+        halfOpenInFlight: false,
+        halfOpenSuccess: 0
+      };
+      this.failedClients.set(clientId, info);
+    }
+    return info;
+  }
+
+  _refreshClientCircuit(clientId, info) {
+    if (info.state === 'OPEN' && info.openUntil && Date.now() >= info.openUntil) {
+      info.state = 'HALF_OPEN';
+      info.blocked = false;
+      info.halfOpenInFlight = false;
+      info.halfOpenSuccess = 0;
+      logger.warn(`客户端 ${clientId} 断路器进入半开，允许探测任务`);
+      this.failedClients.set(clientId, info);
+    }
+  }
+
+  _openClientCircuit(clientId, info, reason) {
+    const now = Date.now();
+    info.state = 'OPEN';
+    info.blocked = true;
+    info.blockedAt = now;
+    info.openUntil = now + this.blockDuration;
+    info.halfOpenInFlight = false;
+    info.halfOpenSuccess = 0;
+    this.failedClients.set(clientId, info);
+
+    logger.error(`客户端 ${clientId} ${reason}，断路器打开 ${this.blockDuration / 1000} 秒`);
+
+    this.clearClientQueue(clientId).then(clearedTasks => {
+      const updatedInfo = this.failedClients.get(clientId);
+      if (updatedInfo && updatedInfo.state === 'OPEN') {
+        updatedInfo.clearedTasks = clearedTasks;
+        this.failedClients.set(clientId, updatedInfo);
+        logger.error(`已清理客户端 ${clientId} 积压任务 ${clearedTasks} 个`);
+      }
+    }).catch(clearError => {
+      logger.error(`清理客户端 ${clientId} 积压任务失败:`, clearError);
+    });
+  }
+
+  _closeClientCircuit(clientId) {
+    this.failedClients.delete(clientId);
+    logger.info(`客户端 ${clientId} 断路器关闭，恢复正常`);
+  }
+
   // 检查客户端是否被阻塞
   isClientBlocked(clientId) {
     const clientInfo = this.failedClients.get(clientId);
-    if (!clientInfo || !clientInfo.blocked) {
-      return false;
-    }
-
-    if (Date.now() - clientInfo.lastFailTime > this.blockDuration) {
-      this.failedClients.delete(clientId);
-      logger.info(`客户端 ${clientId} 阻塞已解除，重新开始处理任务`);
-      return false;
-    }
-
-    return true;
+    if (!clientInfo) return false;
+    this._refreshClientCircuit(clientId, clientInfo);
+    return !!clientInfo.blocked;
   }
 
   // 记录客户端失败
   recordClientFailure(clientId, error) {
     const now = Date.now();
-    const clientInfo = this.failedClients.get(clientId) || { count: 0, lastFailTime: 0, blocked: false, quickFailures: [] };
+    const clientInfo = this._getOrCreateClientInfo(clientId);
 
-    if (clientInfo.blocked) {
+    this._refreshClientCircuit(clientId, clientInfo);
+
+    if (clientInfo.state === 'OPEN') return;
+
+    if (clientInfo.state === 'HALF_OPEN') {
+      this._openClientCircuit(clientId, clientInfo, '半开探测失败');
       return;
     }
 
     clientInfo.count++;
     clientInfo.lastFailTime = now;
-
-    if (!clientInfo.quickFailures) {
-      clientInfo.quickFailures = [];
-    }
+    clientInfo.quickFailures = clientInfo.quickFailures || [];
     clientInfo.quickFailures.push(now);
 
-    const twoMinutesAgo = now - 2 * 60 * 1000;
-    clientInfo.quickFailures = clientInfo.quickFailures.filter(time => time > twoMinutesAgo);
+    const windowStart = now - this.circuitBreaker.quickFailWindowMs;
+    clientInfo.quickFailures = clientInfo.quickFailures.filter(time => time > windowStart);
 
     logger.debug(`客户端 ${clientId} 失败计数: ${clientInfo.count}/${this.maxFailuresBeforeBlock}, 近2分钟快速失败: ${clientInfo.quickFailures.length} 次`);
 
-    const shouldBlockForQuickFailures = clientInfo.quickFailures.length >= 10;
+    const shouldBlockForQuickFailures = clientInfo.quickFailures.length >= this.circuitBreaker.quickFailThreshold;
 
     if (clientInfo.count >= this.maxFailuresBeforeBlock || shouldBlockForQuickFailures) {
-      clientInfo.blocked = true;
-      clientInfo.blockedAt = now;
-
-      this.failedClients.set(clientId, clientInfo);
-
       const blockReason = shouldBlockForQuickFailures ? `2分钟内快速失败${clientInfo.quickFailures.length}次` : `连续失败${clientInfo.count}次`;
-      logger.error(`客户端 ${clientId} ${blockReason}，立即阻塞 ${this.blockDuration / 1000} 秒`);
-
-      this.clearClientQueue(clientId).then(clearedTasks => {
-        const updatedInfo = this.failedClients.get(clientId);
-        if (updatedInfo && updatedInfo.blocked) {
-          updatedInfo.clearedTasks = clearedTasks;
-          this.failedClients.set(clientId, updatedInfo);
-          logger.error(`已清理客户端 ${clientId} 积压任务 ${clearedTasks} 个`);
-        }
-      }).catch(clearError => {
-        logger.error(`清理客户端 ${clientId} 积压任务失败:`, clearError);
-      });
+      this._openClientCircuit(clientId, clientInfo, blockReason);
     } else {
       this.failedClients.set(clientId, clientInfo);
     }
@@ -146,23 +188,44 @@ class ClientTaskQueue {
       return;
     }
 
-    if (clientInfo.blocked) {
-      clientInfo.count = 0;
-      this.failedClients.set(clientId, clientInfo);
-      logger.debug(`客户端 ${clientId} 成功执行任务，重置失败计数，但保持阻塞状态`);
-    } else {
-      this.failedClients.delete(clientId);
-      logger.debug(`客户端 ${clientId} 成功执行任务，清除失败记录`);
+    this._refreshClientCircuit(clientId, clientInfo);
+
+    if (clientInfo.state === 'OPEN') return;
+
+    if (clientInfo.state === 'HALF_OPEN') {
+      clientInfo.halfOpenInFlight = false;
+      clientInfo.halfOpenSuccess = (clientInfo.halfOpenSuccess || 0) + 1;
+
+      if (clientInfo.halfOpenSuccess >= this.circuitBreaker.halfOpenSuccessThreshold) {
+        this._closeClientCircuit(clientId);
+      } else {
+        this.failedClients.set(clientId, clientInfo);
+      }
+      return;
     }
+
+    this.failedClients.delete(clientId);
+    logger.debug(`客户端 ${clientId} 成功执行任务，清除失败记录`);
   }
 
   async enqueue(taskData, priority = 'normal') {
     const { clientId, action } = taskData;
 
-    if (clientId && this.isClientBlocked(clientId)) {
+    if (clientId) {
       const clientInfo = this.failedClients.get(clientId);
-      logger.error(`客户端 ${clientId} 被阻塞，跳过任务入队: ${taskData.action}, 失败次数: ${clientInfo?.count}, 阻塞时间: ${clientInfo?.blockedAt ? new Date(clientInfo.blockedAt).toISOString() : 'unknown'}`);
-      return;
+      if (clientInfo) {
+        this._refreshClientCircuit(clientId, clientInfo);
+      }
+
+      if (clientInfo?.state === 'OPEN') {
+        logger.error(`客户端 ${clientId} 断路器打开，跳过任务入队: ${taskData.action}, 失败次数: ${clientInfo?.count}, 阻塞时间: ${clientInfo?.blockedAt ? new Date(clientInfo.blockedAt).toISOString() : 'unknown'}`);
+        return;
+      }
+
+      if (clientInfo?.state === 'HALF_OPEN' && clientInfo.halfOpenInFlight) {
+        logger.warn(`客户端 ${clientId} 断路器半开探测中，跳过任务入队: ${taskData.action}`);
+        return;
+      }
     }
 
     let actualPriority = priority;
@@ -196,13 +259,14 @@ class ClientTaskQueue {
   getBlockedClientsStatus() {
     const blocked = [];
     for (const [clientId, info] of this.failedClients.entries()) {
-      if (info.blocked) {
-        const remaining = Math.max(0, this.blockDuration - (Date.now() - info.lastFailTime));
+      if (info.state === 'OPEN') {
+        const remaining = Math.max(0, (info.openUntil || 0) - Date.now());
         blocked.push({
           clientId,
           failures: info.count,
           remainingTime: Math.ceil(remaining / 1000),
-          clearedTasks: info.clearedTasks || 0
+          clearedTasks: info.clearedTasks || 0,
+          state: info.state
         });
       }
     }
@@ -299,6 +363,24 @@ class ClientTaskQueue {
           });
         }, this.busyRetryDelayMs);
         return;
+      }
+
+      const circuitInfo = this.failedClients.get(clientId);
+      if (circuitInfo) {
+        this._refreshClientCircuit(clientId, circuitInfo);
+        if (circuitInfo.state === 'OPEN') {
+          logger.warn(`客户端 ${clientId} 断路器打开，跳过任务执行: ${action}`);
+          return;
+        }
+        if (circuitInfo.state === 'HALF_OPEN') {
+          if (circuitInfo.halfOpenInFlight) {
+            logger.warn(`客户端 ${clientId} 断路器半开探测中，跳过任务执行: ${action}`);
+            return;
+          }
+          circuitInfo.halfOpenInFlight = true;
+          this.failedClients.set(clientId, circuitInfo);
+          logger.warn(`客户端 ${clientId} 断路器半开，执行探测任务: ${action}`);
+        }
       }
 
       this.activeClientTasks.set(clientId, { action, startTime: Date.now() });
