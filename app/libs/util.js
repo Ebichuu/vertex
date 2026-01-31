@@ -90,6 +90,13 @@ const runMigrations = function () {
       CREATE INDEX IF NOT EXISTS index_torrents_record_type_time
       ON torrents (record_type, record_time);
     `);
+
+    // torrents 表新增 client_id 字段
+    const torrentColumns = db.prepare('PRAGMA table_info(torrents)').all().map(item => item.name);
+    if (torrentColumns.indexOf('client_id') === -1) {
+      db.exec('ALTER TABLE torrents ADD COLUMN client_id TEXT');
+      logger.info('torrents 表新增 client_id 字段');
+    }
     
     // 追加索引 - 覆盖查询以优化 sum(upload)/sum(download) 等聚合
     db.exec(`

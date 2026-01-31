@@ -10,7 +10,7 @@
       :data-source="torrents"
       :pagination="pagination"
       @change="handleChange"
-      :scroll="{ x: 960 }"
+      :scroll="{ x: 1040 }"
     >
       <template #title>
         <span style="font-size: 16px; font-weight: bold;">RSS 历史</span>
@@ -26,6 +26,10 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'rssId'">
           {{ (rssList.filter(item => item.id === record.rssId)[0] || { alias: '已删除' }).alias }}
+        </template>
+        <template v-if="column.dataIndex === 'clientId'">
+          <a v-if="record.clientId" @click="gotoClient(record.clientId)">{{ record.clientId }}</a>
+          <span v-else>-</span>
         </template>
         <template v-if="['size', 'upload', 'download'].indexOf(column.dataIndex) !== -1">
           {{ $formatSize(record[column.dataIndex]) }}
@@ -60,6 +64,10 @@ export default {
         width: 18,
         filterMultiple: false,
         fixed: true
+      }, {
+        title: '客户端',
+        dataIndex: 'clientId',
+        width: 24
       }, {
         title: '种子名称',
         dataIndex: 'name',
@@ -147,6 +155,10 @@ export default {
     async gotoDetail (record) {
       if (!record.link) return await this.$message().error('链接不存在');
       window.open(record.link);
+    },
+    async gotoClient (clientId) {
+      if (!clientId) return;
+      window.open(`/proxy/client/${clientId}/`);
     },
     async handleChange (pagination, filters) {
       this.qs.page = pagination.current;

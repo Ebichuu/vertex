@@ -199,8 +199,8 @@ class Site {
       }
     }
     // 1: 添加 2: 拒绝 3: 错误 4: 搜索推送 6: 豆瓣推送 98: 4 完成 99: 6 完成
-    await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, add_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [hash, name, size, this.site, torrentLink, moment().unix(), moment().unix(), recordType, recordNote]);
+    await util.runRecord('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, add_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [hash, name, size, this.site, torrentLink, moment().unix(), moment().unix(), recordType, recordNote, client]);
     return '推送成功, 种子 hash: ' + hash;
   }
 
