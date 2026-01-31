@@ -419,6 +419,7 @@ class Setting {
       // 检查定时任务状态
       const taskStatus = {
         dailyStatsAggregation: global.dailyStatsAggregation ? '已启动' : '未启动',
+        dailyStatsEnsure: global.dailyStatsEnsure ? '已启动' : '未启动',
         clearDatabase: global.clearDatabase ? '已启动' : '未启动'
       };
       
@@ -461,6 +462,10 @@ class Setting {
           dailyStatsAggregation: {
             exists: !!global.dailyStatsAggregation,
             status: global.dailyStatsAggregation ? '运行中' : '未启动'
+          },
+          dailyStatsEnsure: {
+            exists: !!global.dailyStatsEnsure,
+            status: global.dailyStatsEnsure ? '运行中' : '未启动'
           },
           clearDatabase: {
             exists: !!global.clearDatabase,

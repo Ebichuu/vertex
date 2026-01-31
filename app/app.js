@@ -38,6 +38,20 @@ const initPush = function () {
 };
 
 const init = function () {
+  let dailyStatsRunning = false;
+  const runDailyStatsJob = async (jobName, fn) => {
+    if (dailyStatsRunning) {
+      logger.warn(`${jobName} 跳过执行: 已有统计任务正在运行`);
+      return;
+    }
+    dailyStatsRunning = true;
+    try {
+      await fn();
+    } finally {
+      dailyStatsRunning = false;
+    }
+  };
+
   global.clearDatabase = cron.schedule('1 0 * * *', async () => {
     try {
       logger.info('开始执行数据库清理任务...');
@@ -56,11 +70,29 @@ const init = function () {
   // 每日统计聚合定时任务 - 每天凌晨2点执行
   global.dailyStatsAggregation = cron.schedule('0 2 * * *', async () => {
     try {
-      logger.info('开始执行每日统计聚合...');
-      await util.aggregateDailyStats();
-      logger.info('每日统计聚合完成');
+      await runDailyStatsJob('每日统计聚合任务', async () => {
+        logger.info('开始执行每日统计聚合...');
+        await util.aggregateDailyStats();
+        logger.info('每日统计聚合完成');
+      });
     } catch (e) {
       logger.error('每日统计聚合失败:', e);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Shanghai'
+  });
+
+  // 每日统计补偿任务 - 凌晨2:10检查最近几天是否有遗漏
+  global.dailyStatsEnsure = cron.schedule('10 2 * * *', async () => {
+    try {
+      await runDailyStatsJob('每日统计补偿任务', async () => {
+        logger.info('开始执行每日统计补偿...');
+        await util.ensureDailyStats({ days: 7, skipEmpty: true });
+        logger.info('每日统计补偿完成');
+      });
+    } catch (e) {
+      logger.error('每日统计补偿失败:', e);
     }
   }, {
     scheduled: true,
@@ -71,6 +103,7 @@ const init = function () {
   logger.info('核心维护定时任务已启动 (中国时区):');
   logger.info('- 数据库清理任务: 每天凌晨0点1分执行');
   logger.info('- 每日统计聚合任务: 每天凌晨2点执行');
+  logger.info('- 每日统计补偿任务: 每天凌晨2点10分执行');
 
   // 添加队列监控任务
   global.queueMonitor = cron.schedule('*/30 * * * * *', async () => {
@@ -139,9 +172,11 @@ const init = function () {
   // 添加测试任务状态的辅助函数
   global.testDailyStatsTask = async () => {
     try {
-      logger.info('手动测试每日统计聚合任务...');
-      await util.aggregateDailyStats();
-      logger.info('手动测试完成');
+      await runDailyStatsJob('手动测试每日统计聚合任务', async () => {
+        logger.info('手动测试每日统计聚合任务...');
+        await util.aggregateDailyStats();
+        logger.info('手动测试完成');
+      });
       return true;
     } catch (e) {
       logger.error('手动测试失败:', e);
@@ -149,10 +184,20 @@ const init = function () {
     }
   };
 
+  // 启动后补齐最近几天统计数据（避免错过定时任务）
+  setTimeout(() => {
+    runDailyStatsJob('启动补偿任务', async () => {
+      logger.info('启动补偿: 检查最近统计数据缺口...');
+      await util.ensureDailyStats({ days: 7, skipEmpty: true });
+      logger.info('启动补偿: 完成');
+    }).catch(e => logger.error('启动补偿失败:', e));
+  }, 60 * 1000);
+
   // 在启动时检查定时任务状态
   logger.info('定时任务状态:');
   logger.info('- 数据库清理任务:', global.clearDatabase ? '已启动' : '未启动');
   logger.info('- 每日统计聚合任务:', global.dailyStatsAggregation ? '已启动' : '未启动');
+  logger.info('- 每日统计补偿任务:', global.dailyStatsEnsure ? '已启动' : '未启动');
 
   global.CONFIG = config;
   global.LOGGER = logger;
@@ -308,6 +353,11 @@ function setupGracefulShutdown() {
       if (global.dailyStatsAggregation) {
         global.dailyStatsAggregation.stop();
         logger.info('每日统计聚合定时任务已停止');
+      }
+      
+      if (global.dailyStatsEnsure) {
+        global.dailyStatsEnsure.stop();
+        logger.info('每日统计补偿定时任务已停止');
       }
       
       if (global.cookiecloud) {

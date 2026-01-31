@@ -857,6 +857,83 @@ exports.aggregateDailyStats = async function (targetDate) {
   }
 };
 
+// 检查并补齐最近几天的统计数据，避免定时任务错过导致缺口
+exports.ensureDailyStats = async function (options = {}) {
+  const moment = require('moment');
+  const days = Number.isInteger(options.days) ? options.days : 7;
+  const skipEmpty = options.skipEmpty !== false;
+
+  const getMomentCN = (input) => {
+    if (input) {
+      return moment(input).utcOffset(8 * 60); // UTC+8
+    }
+    return moment().utcOffset(8 * 60); // UTC+8
+  };
+
+  try {
+    if (days <= 0) {
+      logger.info('ensureDailyStats: 跳过执行 (days <= 0)');
+      return;
+    }
+
+    const today = getMomentCN();
+    const endDate = today.clone().subtract(1, 'day').format('YYYY-MM-DD');
+    const startDate = today.clone().subtract(days, 'day').format('YYYY-MM-DD');
+
+    const startTime = getMomentCN(startDate).startOf('day').unix();
+    const endTime = getMomentCN(endDate).endOf('day').unix();
+
+    if (startTime > endTime) {
+      logger.info('ensureDailyStats: 无需补齐 (时间范围为空)');
+      return;
+    }
+
+    logger.info(`ensureDailyStats: 检查范围 ${startDate} ~ ${endDate} (UTC+8)`);
+
+    const existingStats = await exports.getRecords(
+      'SELECT stats_date FROM daily_stats WHERE stats_date >= ? AND stats_date <= ?',
+      [startDate, endDate]
+    );
+    const existingSet = new Set(existingStats.map(item => item.stats_date));
+
+    const dateList = [];
+    const cursor = getMomentCN(startDate);
+    const endMoment = getMomentCN(endDate);
+    while (cursor.isSameOrBefore(endMoment, 'day')) {
+      dateList.push(cursor.format('YYYY-MM-DD'));
+      cursor.add(1, 'day');
+    }
+
+    const missingDates = dateList.filter(date => !existingSet.has(date));
+    if (missingDates.length === 0) {
+      logger.info('ensureDailyStats: 最近统计数据完整，无需补齐');
+      return;
+    }
+
+    // 一次性统计范围内每天的记录数量，避免在循环中频繁查询
+    const counts = await exports.getRecords(
+      "SELECT date(record_time + 28800, 'unixepoch') as stats_date, count(*) as count FROM torrents WHERE record_time >= ? AND record_time <= ? GROUP BY stats_date",
+      [startTime, endTime]
+    );
+    const countMap = new Map(counts.map(item => [item.stats_date, item.count]));
+
+    missingDates.sort();
+    logger.info(`ensureDailyStats: 发现 ${missingDates.length} 天缺失，开始补齐`);
+
+    for (const date of missingDates) {
+      const count = countMap.get(date) || 0;
+      if (skipEmpty && count === 0) {
+        logger.info(`ensureDailyStats: ${date} 无种子记录，跳过聚合`);
+        continue;
+      }
+      await exports.aggregateDailyStats(date);
+    }
+  } catch (e) {
+    logger.error('ensureDailyStats 失败:', e);
+    throw e;
+  }
+};
+
 // 数据库优雅关闭方法
 exports.closeDatabase = function () {
   try {
