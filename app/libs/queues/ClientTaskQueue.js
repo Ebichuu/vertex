@@ -489,6 +489,7 @@ class ClientTaskQueue {
         client.avgDownloadSpeed = res.downloadSpeed * 0.1 + (client.avgDownloadSpeed || 0) * 0.9;
         client.avgUploadSpeed = res.uploadSpeed * 0.1 + (client.avgUploadSpeed || 0) * 0.9;
 
+        client.lastMaindataSuccessTime = Math.floor(Date.now() / 1000);
         client.status = true;
         client.errorCount = 0;
       } else {
@@ -499,6 +500,7 @@ class ClientTaskQueue {
     } catch (error) {
       client.errorCount++;
       client.status = false;
+      client.maindata = null;
       logger.error(`客户端 ${client.alias} 获取数据失败:`, error);
       throw error;
     }
@@ -515,6 +517,10 @@ class ClientTaskQueue {
 
   async executeTrackerSync(client) {
     if (client.client.type !== 'qBittorrent') {
+      return;
+    }
+    if (!client.status) {
+      logger.debug(`客户端离线，跳过Tracker同步: ${client.alias}`);
       return;
     }
 

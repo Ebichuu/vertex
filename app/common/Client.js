@@ -81,6 +81,7 @@ class Client {
     this.errorCount = 0;
     this.trackerStatus = {};
     this.lastTrackerSyncTime = 0;
+    this.lastMaindataSuccessTime = 0;
     this.trackerSyncCursor = 0;
     this.trackerSyncBatchSize = client.trackerSyncBatchSize || 50;
     this.pausedTorrentHashes = [];
@@ -439,6 +440,7 @@ class Client {
       }
       */
       logger.debug('下载器', this.alias, '获取种子信息成功');
+      this.lastMaindataSuccessTime = moment().unix();
       this.status = true;
       this.errorCount = 0;
     } catch (error) {
@@ -559,7 +561,12 @@ class Client {
     if (needTrackerStatus) {
       const now = moment().unix();
       const minInterval = 5 * 60;
-      if (!this.lastTrackerSyncTime || now - this.lastTrackerSyncTime >= minInterval) {
+      const maindataFreshMaxAge = 5 * 60;
+      const maindataAge = this.lastMaindataSuccessTime ? now - this.lastMaindataSuccessTime : null;
+      if (!this.status || maindataAge === null || maindataAge > maindataFreshMaxAge) {
+        const ageText = maindataAge === null ? 'unknown' : `${maindataAge}s`;
+        logger.warn(`下载器 ${this.alias} maindata 过期(${ageText})，跳过 tracker 状态刷新`);
+      } else if (!this.lastTrackerSyncTime || now - this.lastTrackerSyncTime >= minInterval) {
         logger.debug(`下载器 ${this.alias} 开始刷新 tracker 状态以支持站点删种规则`);
         await this.trackerSync();
       }
