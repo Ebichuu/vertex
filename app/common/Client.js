@@ -570,6 +570,10 @@ class Client {
         logger.debug(`下载器 ${this.alias} 开始刷新 tracker 状态以支持站点删种规则`);
         await this.trackerSync();
       }
+      if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) {
+        logger.debug(`下载器 ${this.alias} maindata 缺失，跳过 tracker 状态回填`);
+        return;
+      }
       for (const torrent of this.maindata.torrents) {
         torrent.trackerStatus = this.trackerStatus[torrent.hash] || torrent.trackerStatus || '';
       }

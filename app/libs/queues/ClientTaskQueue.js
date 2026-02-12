@@ -39,6 +39,8 @@ class ClientTaskQueue {
 
     this.fastActions = new Set(['getMaindata', 'flashFitTime']);
     this.slowActions = new Set(['autoDelete', 'trackerSync', 'record', 'autoReannounce']);
+    this.circuitTrackedActions = new Set(['getMaindata']);
+    this.circuitProbeActions = new Set(['getMaindata']);
     this.trackerSyncUrgentInterval = 10 * 60;
 
     this.fastQueue = new ClientTaskQueueWorker('client_fast', this, { maxConcurrent: 6 });
@@ -72,6 +74,14 @@ class ClientTaskQueue {
 
   _isLowPriority(action) {
     return this.lowPriorityActions.has(action);
+  }
+
+  _isCircuitTrackedAction(action) {
+    return this.circuitTrackedActions.has(action);
+  }
+
+  _isCircuitProbeAction(action) {
+    return this.circuitProbeActions.has(action);
   }
 
   _shouldPromoteTrackerSync(client) {
@@ -222,9 +232,15 @@ class ClientTaskQueue {
         return;
       }
 
-      if (clientInfo?.state === 'HALF_OPEN' && clientInfo.halfOpenInFlight) {
-        logger.warn(`客户端 ${clientId} 断路器半开探测中，跳过任务入队: ${taskData.action}`);
-        return;
+      if (clientInfo?.state === 'HALF_OPEN') {
+        if (!this._isCircuitProbeAction(action)) {
+          logger.warn(`客户端 ${clientId} 断路器半开，仅允许探测动作，跳过任务入队: ${taskData.action}`);
+          return;
+        }
+        if (clientInfo.halfOpenInFlight) {
+          logger.warn(`客户端 ${clientId} 断路器半开探测中，跳过任务入队: ${taskData.action}`);
+          return;
+        }
       }
     }
 
@@ -373,6 +389,10 @@ class ClientTaskQueue {
           return;
         }
         if (circuitInfo.state === 'HALF_OPEN') {
+          if (!this._isCircuitProbeAction(action)) {
+            logger.warn(`客户端 ${clientId} 断路器半开，仅允许探测动作，跳过任务执行: ${action}`);
+            return;
+          }
           if (circuitInfo.halfOpenInFlight) {
             logger.warn(`客户端 ${clientId} 断路器半开探测中，跳过任务执行: ${action}`);
             return;
@@ -420,7 +440,9 @@ class ClientTaskQueue {
       const duration = Date.now() - startTime;
       logger.debug(`客户端任务完成: ${client.alias}, 动作: ${action}, 耗时: ${duration}ms`);
 
-      this.recordClientSuccess(clientId);
+      if (this._isCircuitTrackedAction(action)) {
+        this.recordClientSuccess(clientId);
+      }
 
       return result;
     } catch (error) {
@@ -429,7 +451,9 @@ class ClientTaskQueue {
         return;
       }
 
-      this.recordClientFailure(clientId, error);
+      if (this._isCircuitTrackedAction(action)) {
+        this.recordClientFailure(clientId, error);
+      }
       logger.error(`客户端任务执行失败: ${clientId}, 动作: ${task.data.action}`, error);
 
       if (this.isClientBlocked(clientId)) {
