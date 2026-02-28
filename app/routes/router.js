@@ -74,7 +74,7 @@ const clientProxy = function (req, res, next) {
     return;
   }
   proxy(client.clientUrl, {
-    proxyReqOptDecorator (proxyReqOpts, srcReq) {
+    proxyReqOptDecorator(proxyReqOpts, srcReq) {
       proxyReqOpts.headers.cookie = global.runningClient[clientId] ? global.runningClient[clientId].cookie || '' : '';
       if (proxyReqOpts.headers['content-type'] && proxyReqOpts.headers['content-type'].indexOf('application/x-www-form-urlencoded') !== -1) {
         proxyReqOpts.headers['content-type'] = 'application/x-www-form-urlencoded';
@@ -99,7 +99,7 @@ const siteProxy = function (req, res, next) {
   }
   const siteUrl = global.runningSite[siteId].siteUrl;
   proxy(siteUrl, {
-    proxyReqOptDecorator (proxyReqOpts, srcReq) {
+    proxyReqOptDecorator(proxyReqOpts, srcReq) {
       proxyReqOpts.headers.cookie = global.runningSite[siteId] ? global.runningSite[siteId].cookie : '';
       proxyReqOpts.headers['user-agent'] = global.userAgent || 'Vertex';
       delete proxyReqOpts.headers['x-forwarded-for'];
@@ -286,6 +286,7 @@ module.exports = function (app, express, router) {
   router.get('/setting/backfillDailyStats', ctrl.Setting.backfillDailyStats);
   router.post('/setting/cleanExpiredFlowData', ctrl.Setting.cleanExpiredFlowData);
   router.post('/setting/cleanOldTorrents', ctrl.Setting.cleanOldTorrents);
+  router.get('/setting/getPerTrackerPeriodStats', ctrl.Setting.getPerTrackerPeriodStats);
 
   router.all('/openapi/:apiKey/plex', ctrl.Webhook.plex);
   router.all('/openapi/:apiKey/emby', ctrl.Webhook.emby);

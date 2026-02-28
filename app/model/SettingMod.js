@@ -344,6 +344,61 @@ class SettingMod {
     return result;
   };
 
+  // 获取昨日/本周/本月的 per-tracker 统计数据
+  async getPerTrackerPeriodStats() {
+    // 获取中国时区的moment对象
+    const getMomentCN = (input) => {
+      if (input) {
+        return moment(input).utcOffset(8 * 60);
+      }
+      return moment().utcOffset(8 * 60);
+    };
+
+    const today = getMomentCN().format('YYYY-MM-DD');
+    const yesterday = getMomentCN().subtract(1, 'day').format('YYYY-MM-DD');
+    const weekStart = getMomentCN().startOf('isoWeek').format('YYYY-MM-DD');
+    const monthStart = getMomentCN().startOf('month').format('YYYY-MM-DD');
+
+    // 辅助函数：从 daily_stats 聚合指定日期范围的 per-tracker 数据
+    const aggregatePerTracker = async (startDate, endDate) => {
+      const records = await util.getRecords(
+        'SELECT per_tracker_stats FROM daily_stats WHERE stats_date >= ? AND stats_date <= ? AND per_tracker_stats IS NOT NULL',
+        [startDate, endDate]
+      );
+      const trackerSet = {};
+      for (const record of records) {
+        try {
+          const trackerStats = JSON.parse(record.per_tracker_stats);
+          if (Array.isArray(trackerStats)) {
+            for (const stat of trackerStats) {
+              if (!stat.tracker) continue;
+              if (!trackerSet[stat.tracker]) {
+                trackerSet[stat.tracker] = { uploaded: 0, downloaded: 0 };
+              }
+              trackerSet[stat.tracker].uploaded += stat.uploaded || 0;
+              trackerSet[stat.tracker].downloaded += stat.downloaded || 0;
+            }
+          }
+        } catch (e) {
+          // 忽略解析错误
+        }
+      }
+      return Object.keys(trackerSet).map(tracker => ({ tracker, ...trackerSet[tracker] }));
+    };
+
+    const [perTrackerYesterday, perTrackerWeek, perTrackerMonth] = await Promise.all([
+      aggregatePerTracker(yesterday, yesterday),
+      aggregatePerTracker(weekStart, today),
+      aggregatePerTracker(monthStart, today)
+    ]);
+
+    return {
+      perTrackerYesterday,
+      perTrackerWeek,
+      perTrackerMonth
+    };
+  };
+
   async backupVertex(options) {
     const backupsFile = `/tmp/Vertex-backups-${moment().format('YYYY-MM-DD_HH:mm:ss')}.tar.gz`;
     const backupsFileds = ['vertex/db', 'vertex/data', 'vertex/config'];

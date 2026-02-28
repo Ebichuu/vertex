@@ -76,5 +76,9 @@ export default {
   cleanOldTorrents: async (keepMonths) => {
     const url = '/api/setting/cleanOldTorrents';
     return await post(url, { keepMonths });
+  },
+  getPerTrackerPeriodStats: async () => {
+    const url = '/api/setting/getPerTrackerPeriodStats?_=' + Math.random();
+    return await get(url);
   }
 };

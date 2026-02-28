@@ -49,6 +49,60 @@
       :columns="trackerColumns"
       size="small"
       :loading="loading"
+      :data-source="periodStats.perTrackerYesterday.filter(item => item.tracker)"
+      :scroll="{ x: 320 }"
+    >
+      <template #title>
+        <span style="font-size: 16px; font-weight: bold;">昨日数据</span>
+      </template>
+      <template #bodyCell="{ column, record }">
+        <template v-if="['uploaded', 'downloaded'].indexOf(column.dataIndex) !== -1">
+          {{ $formatSize(record[column.dataIndex]) }}
+        </template>
+      </template>
+    </a-table>
+    <a-divider></a-divider>
+    <a-table
+      :style="`font-size: ${isMobile() ? '12px': '14px'};`"
+      :columns="trackerColumns"
+      size="small"
+      :loading="loading"
+      :data-source="periodStats.perTrackerWeek.filter(item => item.tracker)"
+      :scroll="{ x: 320 }"
+    >
+      <template #title>
+        <span style="font-size: 16px; font-weight: bold;">本周数据</span>
+      </template>
+      <template #bodyCell="{ column, record }">
+        <template v-if="['uploaded', 'downloaded'].indexOf(column.dataIndex) !== -1">
+          {{ $formatSize(record[column.dataIndex]) }}
+        </template>
+      </template>
+    </a-table>
+    <a-divider></a-divider>
+    <a-table
+      :style="`font-size: ${isMobile() ? '12px': '14px'};`"
+      :columns="trackerColumns"
+      size="small"
+      :loading="loading"
+      :data-source="periodStats.perTrackerMonth.filter(item => item.tracker)"
+      :scroll="{ x: 320 }"
+    >
+      <template #title>
+        <span style="font-size: 16px; font-weight: bold;">本月数据</span>
+      </template>
+      <template #bodyCell="{ column, record }">
+        <template v-if="['uploaded', 'downloaded'].indexOf(column.dataIndex) !== -1">
+          {{ $formatSize(record[column.dataIndex]) }}
+        </template>
+      </template>
+    </a-table>
+    <a-divider></a-divider>
+    <a-table
+      :style="`font-size: ${isMobile() ? '12px': '14px'};`"
+      :columns="trackerColumns"
+      size="small"
+      :loading="loading"
       :data-source="runInfo.perTracker.filter(item => item.tracker)"
       :scroll="{ x: 320 }"
     >
@@ -118,6 +172,11 @@ export default {
       runInfo: {
         perTracker: [],
         perTrackerToday: []
+      },
+      periodStats: {
+        perTrackerYesterday: [],
+        perTrackerWeek: [],
+        perTrackerMonth: []
       }
     };
   },
@@ -144,11 +203,20 @@ export default {
       } catch (e) {
         await this.$message().error(e.message);
       }
+    },
+    async getPeriodStats () {
+      try {
+        const res = await this.$api().setting.getPerTrackerPeriodStats();
+        this.periodStats = res.data;
+      } catch (e) {
+        await this.$message().error(e.message);
+      }
     }
   },
   async mounted () {
     this.listDownloader();
     this.getRunInfo();
+    this.getPeriodStats();
     this.interval = setInterval(() => {
       this.listDownloader();
     }, 5000);
