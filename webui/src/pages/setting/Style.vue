@@ -56,6 +56,20 @@
           <a-input size="small" v-model:value="setting.jellyfinCover"/>
         </a-form-item>
         <a-form-item
+          label="首页刷新间隔"
+          name="dashboardRefreshInterval"
+          extra="首页数据刷新间隔（秒），最低5秒">
+          <a-input-number
+            size="small"
+            v-model:value="setting.dashboardRefreshInterval"
+            :min="5"
+            :max="300"
+            :step="1"
+            style="width: 120px;"
+          />
+          <span style="margin-left: 8px;">秒</span>
+        </a-form-item>
+        <a-form-item
           label="首页显示内容"
           name="dashboardContent"
           extra="选择首页数据展示">
@@ -80,7 +94,8 @@ export default {
   data () {
     return {
       setting: {
-        dashboardContent: []
+        dashboardContent: [],
+        dashboardRefreshInterval: 5
       },
       contentType: [
         {
@@ -114,7 +129,8 @@ export default {
           embyCover: s.embyCover,
           plexCover: s.plexCover,
           jellyfinCover: s.jellyfinCover,
-          dashboardContent: s.dashboardContent || []
+          dashboardContent: s.dashboardContent || [],
+          dashboardRefreshInterval: s.dashboardRefreshInterval || 5
         };
       } catch (e) {
         await this.$message().error(e.message);

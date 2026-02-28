@@ -112,6 +112,7 @@
               <div style="font-size: 14px; font-weight: bold; color: #fff; padding: 16px 16px;">
                 <div>{{ downloader.alias }}</div>
                 <div style="margin: initial; font-size: 12px;">累计数据: {{ $formatSize(downloader.allTimeUpload) }} ↑ / {{$formatSize(downloader.allTimeDownload)}} ↓</div>
+                <div style="margin: initial; font-size: 12px;">分享率: <span :style="{ color: (downloader.allTimeDownload > 0 ? downloader.allTimeUpload / downloader.allTimeDownload : 0) >= 1 ? '#52c41a' : '#fa8c16' }">{{ downloader.allTimeDownload > 0 ? (downloader.allTimeUpload / downloader.allTimeDownload).toFixed(2) : '∞' }}</span></div>
                 <div style="margin: initial; font-size: 16px;">{{ $formatSize(downloader.uploadSpeed) }}/s ↑ / {{$formatSize(downloader.downloadSpeed)}}/s ↓</div>
               </div>
             </div>
@@ -128,6 +129,7 @@
               <div style="font-size: 14px; font-weight: bold; padding: 16px 16px;">
                 <div>{{ downloader.alias }}</div>
                 <div style="margin: initial; font-size: 12px;">累计数据: {{ $formatSize(downloader.allTimeUpload) }} ↑ / {{$formatSize(downloader.allTimeDownload)}} ↓</div>
+                <div style="margin: initial; font-size: 12px;">分享率: <span :style="{ color: (downloader.allTimeDownload > 0 ? downloader.allTimeUpload / downloader.allTimeDownload : 0) >= 1 ? '#52c41a' : '#fa8c16' }">{{ downloader.allTimeDownload > 0 ? (downloader.allTimeUpload / downloader.allTimeDownload).toFixed(2) : '∞' }}</span></div>
                 <div style="margin: initial; font-size: 16px;">{{ $formatSize(downloader.uploadSpeed) }}/s ↑ / {{$formatSize(downloader.downloadSpeed)}}/s ↓</div>
               </div>
             </div>
@@ -396,6 +398,7 @@ export default {
         this.loadingSteps.downloader = true;
         const res = await this.$api().downloader.listMainInfo();
         this.downloaders = res.data
+          .filter(item => item.enable)
           .sort((a, b) => a.alias.localeCompare(b.alias))
           .map(item => ({
             ...item,
@@ -569,6 +572,7 @@ export default {
       });
       
       // 设置定时刷新
+      const refreshMs = Math.max((this.runInfo.dashboardRefreshInterval || 5) * 1000, 5000);
       this.interval = setInterval(() => {
         if (downloader && this.downloaders.length > 0) {
           this.listDownloaderInfo();
@@ -576,7 +580,7 @@ export default {
         if (server && this.servers.length > 0) {
           this.getNetSpeed();
         }
-      }, 3000);
+      }, refreshMs);
       
     } catch (error) {
       console.error('💥 主数据加载失败:', error);
