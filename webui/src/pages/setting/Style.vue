@@ -59,14 +59,7 @@
           label="首页刷新间隔"
           name="dashboardRefreshInterval"
           extra="首页数据刷新间隔（秒），最低5秒">
-          <a-input-number
-            size="small"
-            v-model:value="setting.dashboardRefreshInterval"
-            :min="5"
-            :max="300"
-            :step="1"
-            style="width: 120px;"
-          />
+          <a-input size="small" v-model:value="setting.dashboardRefreshInterval" type="number" min="5" max="300" style="width: 120px;" />
           <span style="margin-left: 8px;">秒</span>
         </a-form-item>
         <a-form-item
