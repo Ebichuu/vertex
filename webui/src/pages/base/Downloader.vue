@@ -296,6 +296,8 @@
   </div>
 </template>
 <script>
+import { Modal } from 'ant-design-vue';
+import { h } from 'vue';
 export default {
   data () {
     const columns = [
@@ -412,7 +414,12 @@ export default {
     },
     async deleteDownloader (row) {
       if (row.used) {
-        this.$message().error('组件被占用, 取消占用后删除');
+        this.$message().error('组件被豆瓣/监控任务占用, 取消占用后删除');
+        return;
+      }
+      const rssDeps = [...(row.usedByRss || []), ...(row.usedByReseed || [])];
+      if (rssDeps.length > 0) {
+        await this.handleRssDependency(row, 'delete');
         return;
       }
       try {
@@ -424,6 +431,14 @@ export default {
       }
     },
     async enableDownloader (record) {
+      // 禁用操作且有 RSS 引用时需要确认
+      if (!record.enable) {
+        const rssDeps = [...(record.usedByRss || []), ...(record.usedByReseed || [])];
+        if (rssDeps.length > 0) {
+          await this.handleRssDependency(record, 'disable');
+          return;
+        }
+      }
       try {
         await this.$api().downloader.modify({ ...record });
         this.$message().success('修改成功, 列表正在刷新...');
@@ -432,6 +447,85 @@ export default {
       } catch (e) {
         this.$message().error(e.message);
       }
+    },
+    async handleRssDependency (record, action) {
+      const rssDeps = [...(record.usedByRss || []), ...(record.usedByReseed || [])];
+      const hasOnlyClient = (record.usedByRss || []).some(r => r.isOnly);
+      const onlyRssList = (record.usedByRss || []).filter(r => r.isOnly);
+      const actionText = action === 'delete' ? '删除' : '禁用';
+
+      // 获取可替代的下载器列表
+      const otherClients = this.downloaders.filter(d => d.id !== record.id && d.enable);
+      let selectedReplacement = otherClients.length > 0 ? otherClients[0].id : null;
+
+      const rssNames = rssDeps.map(r => r.alias || r.id);
+      const contentNodes = [
+        h('p', `该下载器正在被 ${rssDeps.length} 个 RSS 任务使用：`),
+        h('ul', { style: 'max-height: 150px; overflow-y: auto; padding-left: 20px;' },
+          rssNames.map(name => h('li', name))
+        )
+      ];
+
+      if (hasOnlyClient) {
+        if (otherClients.length === 0) {
+          this.$message().error(`无法${actionText}：RSS任务 [${onlyRssList.map(r => r.alias).join(', ')}] 仅有该下载器，且没有其他可用下载器可替代`);
+          // 恢复开关状态
+          if (action === 'disable') record.enable = true;
+          return;
+        }
+        contentNodes.push(
+          h('p', { style: 'margin-top: 12px; color: #fa8c16; font-weight: bold;' },
+            `❗ 以下 RSS 任务仅有该下载器，需选择替代下载器：`
+          ),
+          h('ul', { style: 'padding-left: 20px;' },
+            onlyRssList.map(r => h('li', r.alias || r.id))
+          ),
+          h('div', { style: 'margin-top: 8px;' }, [
+            h('span', '替代下载器：'),
+            h('select', {
+              style: 'width: 200px; padding: 4px;',
+              onChange: (e) => { selectedReplacement = e.target.value; }
+            }, otherClients.map(c =>
+              h('option', { value: c.id, selected: c.id === selectedReplacement }, c.alias)
+            ))
+          ])
+        );
+      } else {
+        contentNodes.push(
+          h('p', { style: 'margin-top: 8px;' }, '将自动从这些 RSS 任务中移除该下载器。')
+        );
+      }
+
+      const self = this;
+      Modal.confirm({
+        title: `确认${actionText}下载器 [${record.alias}]`,
+        content: h('div', contentNodes),
+        okText: `确认${actionText}`,
+        cancelText: '取消',
+        width: 520,
+        async onOk () {
+          try {
+            // 先从 RSS 任务中移除
+            await self.$api().downloader.forceRemoveFromRss(record.id, selectedReplacement);
+            // 再执行实际操作
+            if (action === 'delete') {
+              await self.$api().downloader.delete(record.id);
+              self.$message().success('删除成功, 列表正在刷新...');
+            } else {
+              await self.$api().downloader.modify({ ...record });
+              self.$message().success('禁用成功, 列表正在刷新...');
+            }
+            setTimeout(() => self.listDownloader(), 1000);
+          } catch (e) {
+            self.$message().error(e.message);
+          }
+        },
+        onCancel () {
+          // 恢复开关状态
+          if (action === 'disable') record.enable = true;
+          self.listDownloader();
+        }
+      });
     },
     goto (record) {
       window.open(`/proxy/client/${record.id}/`);

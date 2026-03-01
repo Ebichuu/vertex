@@ -17,6 +17,10 @@ export default {
     const url = '/api/downloader/delete';
     return await post(url, { id });
   },
+  forceRemoveFromRss: async (clientId, replacementClientId) => {
+    const url = '/api/downloader/forceRemoveFromRss';
+    return await post(url, { clientId, replacementClientId });
+  },
   getLogs: async (id) => {
     const url = `/api/downloader/getLogs?client=${id}&_=` + Math.random();
     return await get(url);

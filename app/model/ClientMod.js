@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const Client = require('../common/Client');
+const Rss = require('../common/Rss');
+const logger = require('../libs/logger');
 
 const util = require('../libs/util');
 class ClientMod {
-  add (options) {
+  add(options) {
     const id = util.uuid.v4().split('-')[0];
     const clientSet = { ...options };
     clientSet.id = id;
@@ -17,13 +19,13 @@ class ClientMod {
     return '添加下载器成功';
   };
 
-  delete (options) {
+  delete(options) {
     fs.unlinkSync(path.join(__dirname, '../data/client/', options.id + '.json'));
     if (global.runningClient[options.id]) global.runningClient[options.id].destroy();
     return '删除下载器成功';
   };
 
-  modify (options) {
+  modify(options) {
     const clientSet = { ...options };
     clientSet.deleteRules = clientSet.deleteRules || [];
     clientSet.sameServerClients = clientSet.sameServerClients || [];
@@ -33,16 +35,23 @@ class ClientMod {
     return '修改下载器成功';
   };
 
-  list () {
+  list() {
     const rssList = util.listRss();
     const doubanList = util.listDouban();
     const clientList = util.listClient();
     const watchList = util.listWatch();
     for (const client of clientList) {
-      client.used = !global.ignoreDependCheck && (rssList.some(item => (item.clientArr || [item.client]).indexOf(client.id) !== -1) ||
-        rssList.some(item => item.reseedClients.indexOf(client.id) !== -1) ||
-        doubanList.some(item => item.client === client.id) ||
-        watchList.some(item => item.downloader === client.id));
+      // RSS 任务引用详情（前端弹窗用，不阻止操作）
+      client.usedByRss = rssList
+        .filter(item => (item.clientArr || [item.client]).indexOf(client.id) !== -1)
+        .map(item => ({ id: item.id, alias: item.alias, isOnly: (item.clientArr || [item.client]).length <= 1 }));
+      client.usedByReseed = rssList
+        .filter(item => (item.reseedClients || []).indexOf(client.id) !== -1)
+        .map(item => ({ id: item.id, alias: item.alias }));
+      // 豆瓣/监控引用保持禁止操作
+      client.usedByDouban = doubanList.some(item => item.client === client.id);
+      client.usedByWatch = watchList.some(item => item.downloader === client.id);
+      client.used = !global.ignoreDependCheck && (client.usedByDouban || client.usedByWatch);
       client.status = !!(client.enable && global.runningClient[client.id] && global.runningClient[client.id].status && global.runningClient[client.id].maindata);
       if (client.status) {
         client.allTimeUpload = global.runningClient[client.id].maindata.allTimeUpload;
@@ -56,7 +65,7 @@ class ClientMod {
     return clientList;
   };
 
-  listMainInfo () {
+  listMainInfo() {
     const clientList = util.listClient();
     const clientInfos = [];
     for (const client of clientList) {
@@ -81,7 +90,7 @@ class ClientMod {
     return clientInfos;
   }
 
-  listTop10 ({ id }) {
+  listTop10({ id }) {
     const top10 = [];
     const client = global.runningClient[id];
     if (!client) throw new Error('下载器未启用');
@@ -94,7 +103,7 @@ class ClientMod {
     return top10;
   }
 
-  async getSpeedPerTracker () {
+  async getSpeedPerTracker() {
     const clients = global.runningClient;
     const trackers = {};
     for (const clientId of Object.keys(clients)) {
@@ -119,9 +128,43 @@ class ClientMod {
     };
   };
 
-  async getLogs (options) {
+  async getLogs(options) {
     const clients = global.runningClient;
     return await clients[options.client].getLogs();
+  };
+
+  // 从所有 RSS 任务中移除指定下载器的引用
+  forceRemoveFromRss(clientId, replacementClientId) {
+    const rssList = util.listRss();
+    const modified = [];
+    for (const rss of rssList) {
+      let changed = false;
+      const clientArr = rss.clientArr || [rss.client];
+      // 检查 clientArr 是否包含该下载器
+      if (clientArr.indexOf(clientId) !== -1) {
+        if (clientArr.length <= 1 && replacementClientId) {
+          // 唯一下载器：替换为用户选择的替代下载器
+          rss.clientArr = [replacementClientId];
+        } else {
+          // 多个下载器：直接移除
+          rss.clientArr = clientArr.filter(id => id !== clientId);
+        }
+        changed = true;
+      }
+      // 检查辅种客户端列表
+      if ((rss.reseedClients || []).indexOf(clientId) !== -1) {
+        rss.reseedClients = rss.reseedClients.filter(id => id !== clientId);
+        changed = true;
+      }
+      if (changed) {
+        fs.writeFileSync(path.join(__dirname, '../data/rss/', rss.id + '.json'), JSON.stringify(rss, null, 2));
+        if (global.runningRss[rss.id]) global.runningRss[rss.id].destroy();
+        if (rss.enable) global.runningRss[rss.id] = new Rss(rss);
+        modified.push(rss.alias || rss.id);
+        logger.info(`下载器解除关联: RSS任务 [${rss.alias || rss.id}] 已移除下载器 ${clientId}`);
+      }
+    }
+    return modified;
   };
 }
 

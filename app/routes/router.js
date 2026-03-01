@@ -179,6 +179,7 @@ module.exports = function (app, express, router) {
   router.post('/downloader/add', ctrl.Client.add);
   router.post('/downloader/modify', ctrl.Client.modify);
   router.post('/downloader/delete', ctrl.Client.delete);
+  router.post('/downloader/forceRemoveFromRss', ctrl.Client.forceRemoveFromRss);
 
   router.get('/script/list', ctrl.Script.list);
   router.post('/script/add', ctrl.Script.add);

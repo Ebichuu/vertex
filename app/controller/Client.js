@@ -4,7 +4,7 @@ const ClientMod = require('../model/ClientMod');
 const clientMod = new ClientMod();
 
 class Client {
-  async add (req, res) {
+  async add(req, res) {
     const options = req.body;
     try {
       const r = clientMod.add(options);
@@ -21,7 +21,7 @@ class Client {
     }
   };
 
-  async delete (req, res) {
+  async delete(req, res) {
     const options = req.body;
     try {
       const r = clientMod.delete(options);
@@ -38,7 +38,7 @@ class Client {
     }
   };
 
-  async modify (req, res) {
+  async modify(req, res) {
     const options = req.body;
     try {
       const r = clientMod.modify(options);
@@ -55,7 +55,7 @@ class Client {
     }
   };
 
-  async list (req, res) {
+  async list(req, res) {
     try {
       const r = clientMod.list();
       res.send({
@@ -71,7 +71,7 @@ class Client {
     }
   };
 
-  async listMainInfo (req, res) {
+  async listMainInfo(req, res) {
     try {
       const r = clientMod.listMainInfo();
       res.send({
@@ -87,7 +87,7 @@ class Client {
     }
   };
 
-  async listTop10 (req, res) {
+  async listTop10(req, res) {
     try {
       const r = clientMod.listTop10(req.query);
       res.send({
@@ -103,7 +103,7 @@ class Client {
     }
   };
 
-  async getSpeedPerTracker (req, res) {
+  async getSpeedPerTracker(req, res) {
     try {
       const r = await clientMod.getSpeedPerTracker();
       res.send({
@@ -119,12 +119,30 @@ class Client {
     }
   };
 
-  async getLogs (req, res) {
+  async getLogs(req, res) {
     try {
       const r = await clientMod.getLogs(req.query);
       res.send({
         success: true,
         data: r
+      });
+    } catch (e) {
+      logger.error(e);
+      res.send({
+        success: false,
+        message: e.message
+      });
+    }
+  };
+
+  async forceRemoveFromRss(req, res) {
+    try {
+      const { clientId, replacementClientId } = req.body;
+      const modified = clientMod.forceRemoveFromRss(clientId, replacementClientId);
+      res.send({
+        success: true,
+        data: modified,
+        message: `已从 ${modified.length} 个 RSS 任务中移除该下载器`
       });
     } catch (e) {
       logger.error(e);
