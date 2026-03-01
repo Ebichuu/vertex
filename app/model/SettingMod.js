@@ -383,14 +383,51 @@ class SettingMod {
           // 忽略解析错误
         }
       }
-      return Object.keys(trackerSet).map(tracker => ({ tracker, ...trackerSet[tracker] }));
+      return trackerSet;
     };
 
-    const [perTrackerYesterday, perTrackerWeek, perTrackerMonth] = await Promise.all([
-      aggregatePerTracker(yesterday, yesterday),
-      aggregatePerTracker(weekStart, today),
-      aggregatePerTracker(monthStart, today)
-    ]);
+    // 获取当天实时的 per-tracker 数据（daily_stats 中没有今天的数据）
+    const todayStart = getMomentCN().startOf('day').unix();
+    const todayPerTracker = await util.getRecords(
+      'SELECT sum(upload) as uploaded, sum(download) as downloaded, tracker FROM torrents WHERE tracker IS NOT NULL AND record_time >= ? GROUP BY tracker',
+      [todayStart]
+    );
+    const todayTrackerSet = {};
+    for (const stat of todayPerTracker) {
+      if (stat.tracker) {
+        todayTrackerSet[stat.tracker] = {
+          uploaded: stat.uploaded || 0,
+          downloaded: stat.downloaded || 0
+        };
+      }
+    }
+
+    // 辅助函数：合并两个 trackerSet
+    const mergeTrackerSets = (...sets) => {
+      const merged = {};
+      for (const set of sets) {
+        for (const tracker of Object.keys(set)) {
+          if (!merged[tracker]) {
+            merged[tracker] = { uploaded: 0, downloaded: 0 };
+          }
+          merged[tracker].uploaded += set[tracker].uploaded || 0;
+          merged[tracker].downloaded += set[tracker].downloaded || 0;
+        }
+      }
+      return Object.keys(merged).map(tracker => ({ tracker, ...merged[tracker] }));
+    };
+
+    // 昨日数据：只查 daily_stats
+    const yesterdaySet = await aggregatePerTracker(yesterday, yesterday);
+    const perTrackerYesterday = Object.keys(yesterdaySet).map(tracker => ({ tracker, ...yesterdaySet[tracker] }));
+
+    // 本周数据：daily_stats（weekStart 到 yesterday）+ 今天实时数据
+    const weekHistorySet = await aggregatePerTracker(weekStart, yesterday);
+    const perTrackerWeek = mergeTrackerSets(weekHistorySet, todayTrackerSet);
+
+    // 本月数据：daily_stats（monthStart 到 yesterday）+ 今天实时数据
+    const monthHistorySet = await aggregatePerTracker(monthStart, yesterday);
+    const perTrackerMonth = mergeTrackerSets(monthHistorySet, todayTrackerSet);
 
     return {
       perTrackerYesterday,
