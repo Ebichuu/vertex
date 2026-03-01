@@ -354,7 +354,6 @@ class SettingMod {
       return moment().utcOffset(8 * 60);
     };
 
-    const today = getMomentCN().format('YYYY-MM-DD');
     const yesterday = getMomentCN().subtract(1, 'day').format('YYYY-MM-DD');
     const weekStart = getMomentCN().startOf('isoWeek').format('YYYY-MM-DD');
     const monthStart = getMomentCN().startOf('month').format('YYYY-MM-DD');
