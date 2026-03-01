@@ -16,7 +16,7 @@ const clients = {
 };
 
 class Client {
-  constructor (client) {
+  constructor(client) {
     this._client = client;
     this.id = client.id;
     this.status = false;
@@ -29,18 +29,20 @@ class Client {
     this.pushMessage = client.pushMessage;
     this.maxUploadSpeed = util.calSize(client.maxUploadSpeed, client.maxUploadSpeedUnit);
     this.maxDownloadSpeed = util.calSize(client.maxDownloadSpeed, client.maxDownloadSpeedUnit);
+    this.uploadBandwidth = util.calSize(client.uploadBandwidth, client.uploadBandwidthUnit) || 125000000; // 默认 1Gbps
+    this.downloadBandwidth = util.calSize(client.downloadBandwidth, client.downloadBandwidthUnit) || 125000000; // 默认 1Gbps
     this.minFreeSpace = util.calSize(client.minFreeSpace, client.minFreeSpaceUnit);
     this.alarmSpace = util.calSize(client.alarmSpace, client.alarmSpaceUnit);
     this.maxLeechNum = client.maxLeechNum;
     this.sameServerClients = client.sameServerClients;
     this.maindata = null;
-    
+
     // 初始化任务队列（全局单例）
     if (!global.clientTaskQueue) {
       global.clientTaskQueue = new ClientTaskQueue();
     }
     this.taskQueue = global.clientTaskQueue;
-    
+
     // 修改定时任务，改为入队操作
     this.maindataJob = cron.schedule(client.cron, () => this.scheduleGetMaindata());
     this.spaceAlarm = client.spaceAlarm;
@@ -93,7 +95,7 @@ class Client {
     logger.info('下载器', this.alias, '初始化完毕');
   };
 
-  _sum (arr) {
+  _sum(arr) {
     let sum = 0;
     for (const item of arr) {
       sum += item;
@@ -109,11 +111,11 @@ class Client {
    * @param {number} currentTime 当前时间戳
    * @param {Object} rule 删除规则对象
    */
-  _updateProbabilisticStats (ruleId, torrentHash, isFit, currentTime, rule) {
+  _updateProbabilisticStats(ruleId, torrentHash, isFit, currentTime, rule) {
     if (!this.probabilisticStats[ruleId]) {
       this.probabilisticStats[ruleId] = {};
     }
-    
+
     if (!this.probabilisticStats[ruleId][torrentHash]) {
       this.probabilisticStats[ruleId][torrentHash] = {
         firstCheckTime: currentTime,
@@ -122,20 +124,20 @@ class Client {
         positiveChecks: 0
       };
     }
-    
+
     const stats = this.probabilisticStats[ruleId][torrentHash];
-    
+
     // 记录检查结果
     stats.checks.push({
       timestamp: currentTime,
       result: isFit
     });
-    
+
     stats.totalChecks++;
     if (isFit) {
       stats.positiveChecks++;
     }
-    
+
     // 保持滑动窗口（从规则配置读取窗口大小）
     const windowSize = +(rule.probabilisticWindowSize) || 60; // 默认1分钟
     const windowStart = currentTime - windowSize;
@@ -149,40 +151,40 @@ class Client {
    * @param {Object} rule 删除规则
    * @returns {boolean} 是否满足条件
    */
-  _checkProbabilisticFitTime (ruleId, torrentHash, rule) {
+  _checkProbabilisticFitTime(ruleId, torrentHash, rule) {
     const stats = this.probabilisticStats[ruleId] && this.probabilisticStats[ruleId][torrentHash];
     if (!stats || stats.checks.length === 0) return false;
-    
+
     const currentTime = moment().unix();
     const totalDuration = currentTime - stats.firstCheckTime;
-    
+
     // 确保参数类型转换
     const fitTime = +(rule.fitTime) || 60;
     const windowSize = +(rule.probabilisticWindowSize) || 60;
     const thresholdRate = +(rule.probabilisticThreshold) || 0.6;
     const minChecks = +(rule.probabilisticMinChecks) || 6;
-    
+
     // 必须观察足够长的时间
     if (totalDuration < fitTime) return false;
-    
+
     // 计算最近检查的满足率
     const recentChecks = stats.checks.filter(check => check.timestamp >= currentTime - windowSize);
     if (recentChecks.length === 0) return false;
-    
+
     const recentPositiveRate = recentChecks.filter(check => check.result).length / recentChecks.length;
-    
+
     // 调试日志
-    logger.debug(`概率统计检查 - 规则:${rule.alias}, 种子:${torrentHash.substr(0,8)}, 
+    logger.debug(`概率统计检查 - 规则:${rule.alias}, 种子:${torrentHash.substr(0, 8)}, 
       持续时间:${totalDuration}/${fitTime}s, 检查次数:${recentChecks.length}/${minChecks}, 
-      满足率:${(recentPositiveRate*100).toFixed(1)}%/${(thresholdRate*100).toFixed(1)}%`);
-    
+      满足率:${(recentPositiveRate * 100).toFixed(1)}%/${(thresholdRate * 100).toFixed(1)}%`);
+
     // 多重条件判断
-    return recentChecks.length >= minChecks && 
-           recentPositiveRate >= thresholdRate &&
-           totalDuration >= fitTime;
+    return recentChecks.length >= minChecks &&
+      recentPositiveRate >= thresholdRate &&
+      totalDuration >= fitTime;
   };
 
-  _fitConditions (_torrent, conditions) {
+  _fitConditions(_torrent, conditions) {
     let fit = true;
     const torrent = { ..._torrent };
     torrent.ratio = torrent.uploaded / torrent.size;
@@ -199,47 +201,47 @@ class Client {
     for (const condition of conditions) {
       let value;
       switch (condition.compareType) {
-      case 'equals':
-        fit = fit && (torrent[condition.key] === condition.value || torrent[condition.key] === +condition.value);
-        break;
-      case 'bigger':
-        value = 1;
-        condition.value.split('*').forEach(item => {
-          value *= +item;
-        });
-        fit = fit && torrent[condition.key] > value;
-        break;
-      case 'smaller':
-        value = 1;
-        condition.value.split('*').forEach(item => {
-          value *= +item;
-        });
-        fit = fit && torrent[condition.key] < value;
-        break;
-      case 'contain':
-        fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length !== 0;
-        break;
-      case 'includeIn':
-        fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) !== -1;
-        break;
-      case 'notContain':
-        fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length === 0;
-        break;
-      case 'notIncludeIn':
-        fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) === -1;
-        break;
-      case 'regExp':
-        fit = fit && (torrent[condition.key] + '').match(new RegExp(condition.value));
-        break;
-      case 'notRegExp':
-        fit = fit && !(torrent[condition.key] + '').match(new RegExp(condition.value));
-        break;
+        case 'equals':
+          fit = fit && (torrent[condition.key] === condition.value || torrent[condition.key] === +condition.value);
+          break;
+        case 'bigger':
+          value = 1;
+          condition.value.split('*').forEach(item => {
+            value *= +item;
+          });
+          fit = fit && torrent[condition.key] > value;
+          break;
+        case 'smaller':
+          value = 1;
+          condition.value.split('*').forEach(item => {
+            value *= +item;
+          });
+          fit = fit && torrent[condition.key] < value;
+          break;
+        case 'contain':
+          fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length !== 0;
+          break;
+        case 'includeIn':
+          fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) !== -1;
+          break;
+        case 'notContain':
+          fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length === 0;
+          break;
+        case 'notIncludeIn':
+          fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) === -1;
+          break;
+        case 'regExp':
+          fit = fit && (torrent[condition.key] + '').match(new RegExp(condition.value));
+          break;
+        case 'notRegExp':
+          fit = fit && !(torrent[condition.key] + '').match(new RegExp(condition.value));
+          break;
       }
     }
     return fit;
   }
 
-  _fitDeleteRule (_rule, torrent, fitTimeJob) {
+  _fitDeleteRule(_rule, torrent, fitTimeJob) {
     const rule = { ..._rule };
     const maindata = { ...this.maindata };
     maindata.ruleId = rule.id;
@@ -270,9 +272,9 @@ class Client {
           if (stats) {
             const windowSize = +(rule.probabilisticWindowSize) || 60;
             const recentChecks = stats.checks.filter(check => check.timestamp >= moment().unix() - windowSize);
-            const positiveRate = recentChecks.length > 0 ? 
+            const positiveRate = recentChecks.length > 0 ?
               (recentChecks.filter(check => check.result).length / recentChecks.length * 100).toFixed(1) : 0;
-            logger.debug('概率统计模式 - 开始时间:', moment(stats.firstCheckTime * 1000).format('YYYY-MM-DD HH:mm:ss'), 
+            logger.debug('概率统计模式 - 开始时间:', moment(stats.firstCheckTime * 1000).format('YYYY-MM-DD HH:mm:ss'),
               '设置持续时间:', rule.fitTime, '统计窗口:', windowSize + 's', '最近满足率:', positiveRate + '%',
               '删种规则:', rule.alias, '种子:', torrent.name);
           }
@@ -281,7 +283,7 @@ class Client {
       } else {
         // 传统连续时间模式
         if (this.fitTime[rule.id][torrent.hash]) {
-          logger.debug('连续时间模式 - 开始时间:', moment(this.fitTime[rule.id][torrent.hash] * 1000 || 0).format('YYYY-MM-DD HH:mm:ss'), 
+          logger.debug('连续时间模式 - 开始时间:', moment(this.fitTime[rule.id][torrent.hash] * 1000 || 0).format('YYYY-MM-DD HH:mm:ss'),
             '设置持续时间:', rule.fitTime, '删种规则:', rule.alias, '种子:', torrent.name);
         }
         fit = fit && (moment().unix() - this.fitTime[rule.id][torrent.hash] > rule.fitTime);
@@ -290,7 +292,7 @@ class Client {
     return fit;
   };
 
-  destroy () {
+  destroy() {
     logger.info('销毁下载器实例', this.alias);
     this.maindataJob.stop();
     delete this.maindataJob;
@@ -318,7 +320,7 @@ class Client {
     }
     this.recordJob.stop();
     delete this.recordJob;
-    
+
     // 清理任务队列中的阻塞状态和积压任务
     if (this.taskQueue) {
       try {
@@ -328,11 +330,11 @@ class Client {
         logger.error(`清理客户端 ${this.alias} 任务队列失败:`, error);
       }
     }
-    
+
     delete global.runningClient[this.id];
   };
 
-  reloadDeleteRule () {
+  reloadDeleteRule() {
     logger.info('重新加载删种规则', this.alias);
     for (const rule of this.deleteRules) {
       if (rule.fitTimeJob) {
@@ -353,7 +355,7 @@ class Client {
     }
   };
 
-  reloadPush () {
+  reloadPush() {
     logger.info('下载器', this.alias, '重新载入推送方式');
     this.notify = util.listPush().filter(item => item.id === this._client.notify)[0] || {};
     this.notify.push = this._client.pushNotify;
@@ -364,7 +366,7 @@ class Client {
     this.login();
   };
 
-  async login (notify = true) {
+  async login(notify = true) {
     try {
       this.cookie = await this.client.login(this.username, this.clientUrl, this.password);
       this.status = true;
@@ -390,7 +392,7 @@ class Client {
     }
   };
 
-  async getMaindata () {
+  async getMaindata() {
     if (!this.cookie) {
       this.login();
       return;
@@ -460,7 +462,7 @@ class Client {
     }
   };
 
-  async addTorrent (torrentUrl, hash, isSkipChecking = false, uploadLimit = 0, downloadLimit = 0, savePath, category, autoTMM, paused) {
+  async addTorrent(torrentUrl, hash, isSkipChecking = false, uploadLimit = 0, downloadLimit = 0, savePath, category, autoTMM, paused) {
     if (!this.status) {
       throw new Error('客户端' + this.alias + '当前状态为不可用');
     }
@@ -476,13 +478,13 @@ class Client {
       [hash, 0, 0, moment().unix() - moment().unix() % 300]);
   };
 
-  async addTorrentTag (hash, tag) {
+  async addTorrentTag(hash, tag) {
     if (this._client.type === 'qBittorrent') {
       await this.client.addTorrentTag(this.clientUrl, this.cookie, hash, tag);
     }
   }
 
-  async addTorrentByTorrentFile (filepath, hash, isSkipChecking = false, uploadLimit = 0, downloadLimit = 0, savePath, category, autoTMM, paused) {
+  async addTorrentByTorrentFile(filepath, hash, isSkipChecking = false, uploadLimit = 0, downloadLimit = 0, savePath, category, autoTMM, paused) {
     const { statusCode } = await this.client.addTorrentByTorrentFile(this.clientUrl, this.cookie, filepath, isSkipChecking, uploadLimit, downloadLimit, savePath, category, autoTMM, this.firstLastPiecePrio, paused);
     if (statusCode !== 200) {
       this.login();
@@ -495,7 +497,7 @@ class Client {
       [hash, 0, 0, moment().unix() - moment().unix() % 300]);
   };
 
-  async reannounceTorrent (torrent) {
+  async reannounceTorrent(torrent) {
     try {
       await this.client.reannounceTorrent(this.clientUrl, this.cookie, torrent.hash);
       logger.info('下载器', this.alias, '重新汇报种子成功:', torrent.name);
@@ -506,7 +508,7 @@ class Client {
     }
   };
 
-  async deleteTorrent (torrent, rule) {
+  async deleteTorrent(torrent, rule) {
     let isDeleteFiles = true;
     try {
       for (const _torrent of this.maindata.torrents) {
@@ -535,7 +537,7 @@ class Client {
     return isDeleteFiles;
   };
 
-  async autoReannounce () {
+  async autoReannounce() {
     if (!this.maindata) return;
     logger.debug(this.alias, moment().format(), '启动重新汇报任务');
     for (const torrent of this.maindata.torrents) {
@@ -553,7 +555,7 @@ class Client {
     }
   }
 
-  async autoDelete () {
+  async autoDelete() {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
     this.deleteRuleExecutionId++;
     const needTrackerStatus = this._client.type === 'qBittorrent' &&
@@ -580,7 +582,7 @@ class Client {
     }
     const torrents = this.maindata.torrents.sort((a, b) =>
       (a.completedTime <= 0 ? moment().unix() : a.completedTime) - (b.completedTime <= 0 ? moment().unix() : b.completedTime) ||
-        a.addedTime - b.addedTime);
+      a.addedTime - b.addedTime);
     const deletedTorrentHash = [];
     const rejectDeleteHash = {};
     for (const torrent of torrents) {
@@ -628,7 +630,7 @@ class Client {
     }
   };
 
-  async record () {
+  async record() {
     if (!this.maindata) return;
     const torrentSet = {};
     const now = moment().startOf('minute').unix();
@@ -666,16 +668,16 @@ class Client {
     }
   };
 
-  flashFitTime (rule) {
+  flashFitTime(rule) {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) return;
     this.deleteRuleExecutionId++;
     try {
       const torrents = this.maindata.torrents;
       const currentTime = moment().unix();
-      
+
       for (const torrent of torrents) {
         const isFit = this._fitDeleteRule(rule, torrent, true);
-        
+
         if (rule.probabilisticFitTime) {
           // 概率统计模式：记录每次检查结果
           this._updateProbabilisticStats(rule.id, torrent.hash, isFit, currentTime, rule);
@@ -693,7 +695,7 @@ class Client {
     }
   }
 
-  async trackerSync () {
+  async trackerSync() {
     if (!this.maindata || !this.maindata.torrents || this.maindata.torrents.length === 0) {
       logger.debug(`下载器 ${this.alias} tracker同步跳过: maindata=${!!this.maindata}, torrents=${this.maindata?.torrents?.length || 0}`);
       return;
@@ -737,7 +739,7 @@ class Client {
     }
   };
 
-  async pushSpaceAlarm () {
+  async pushSpaceAlarm() {
     if (!this.spaceAlarm || this.alarmSpace < this.maindata.freeSpaceOnDisk) return;
     try {
       await this.ntf.spaceAlarm(this);
@@ -746,7 +748,7 @@ class Client {
     }
   }
 
-  async getFiles (hash) {
+  async getFiles(hash) {
     if (this._client.type === 'qBittorrent') {
       return await this.client.getFiles(this.clientUrl, this.cookie, hash);
     }
@@ -759,50 +761,50 @@ class Client {
     }
   }
 
-  async setSpeedLimit (hash, type, speed) {
+  async setSpeedLimit(hash, type, speed) {
     if (this._client.type === 'qBittorrent') {
       await this.client.setSpeedLimit(this.clientUrl, this.cookie, hash, type, speed);
     }
   }
 
-  async setGlobalSpeedLimit (type, speed) {
+  async setGlobalSpeedLimit(type, speed) {
     if (this._client.type === 'qBittorrent') {
       await this.client.setGlobalSpeedLimit(this.clientUrl, this.cookie, type, speed);
     }
   }
 
-  async getGlobalSpeedLimit (type) {
+  async getGlobalSpeedLimit(type) {
     if (this._client.type === 'qBittorrent') {
       return await this.client.getGlobalSpeedLimit(this.clientUrl, this.cookie, type);
     }
     return 0;
   }
 
-  async setFilePriority (hash, id, priority) {
+  async setFilePriority(hash, id, priority) {
     if (this._client.type === 'qBittorrent') {
       await this.client.setFilePriority(this.clientUrl, this.cookie, hash, id, priority);
     }
   }
 
-  async setTorrentCategory (hash, category) {
+  async setTorrentCategory(hash, category) {
     if (this._client.type === 'qBittorrent') {
       await this.client.setTorrentCategory(this.clientUrl, this.cookie, hash, category);
     }
   }
 
-  async resumeTorrent (hash) {
+  async resumeTorrent(hash) {
     if (this._client.type === 'qBittorrent') {
       await this.client.resumeTorrent(this.clientUrl, this.cookie, hash);
     }
   }
 
-  async pauseTorrent (hash) {
+  async pauseTorrent(hash) {
     if (this._client.type === 'qBittorrent') {
       await this.client.pauseTorrent(this.clientUrl, this.cookie, hash);
     }
   }
 
-  async getLogs (hash) {
+  async getLogs(hash) {
     if (this._client.type === 'qBittorrent') {
       return await this.client.getLogs(this.clientUrl, this.cookie, hash);
     }

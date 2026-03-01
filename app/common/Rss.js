@@ -13,7 +13,7 @@ const rateLimiter = require('../libs/rate-limiter');
 const Push = require('./Push');
 
 class Rss {
-  constructor (rss) {
+  constructor(rss) {
     this._rss = rss;
     this.id = rss.id;
     this.maxSleepTime = rss.maxSleepTime;
@@ -54,7 +54,7 @@ class Rss {
     this.ntf = new Push(this.notify);
     this._acceptRules = rss.acceptRules || [];
     this._rejectRules = rss.rejectRules || [];
-    
+
     // 初始化任务队列（全局单例）
     if (!global.rssTaskQueue) {
       global.rssTaskQueue = new RssTaskQueue();
@@ -72,12 +72,12 @@ class Rss {
       // 修改为入队操作
       this.rssJob = cron.schedule(rss.cron, () => this.scheduleRssFetch());
       this.clearCount = cron.schedule('0 * * * *', () => this.scheduleClearCount());
-      
+
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
   }
 
-  async _loadLastRssTime () {
+  async _loadLastRssTime() {
     if (!this.lastRssTimeKey) return;
     try {
       const stored = await redis.get(this.lastRssTimeKey);
@@ -91,7 +91,7 @@ class Rss {
     }
   }
 
-  async _loadLastAttemptTime () {
+  async _loadLastAttemptTime() {
     if (!this.lastAttemptTimeKey) return;
     try {
       const stored = await redis.get(this.lastAttemptTimeKey);
@@ -105,7 +105,7 @@ class Rss {
     }
   }
 
-  async _persistLastRssTime (timestamp) {
+  async _persistLastRssTime(timestamp) {
     if (!this.lastRssTimeKey) return;
     if (!Number.isFinite(timestamp)) return;
     this.lastRssTime = timestamp;
@@ -116,7 +116,7 @@ class Rss {
     }
   }
 
-  async _persistLastAttemptTime (timestamp) {
+  async _persistLastAttemptTime(timestamp) {
     if (!this.lastAttemptTimeKey) return;
     if (!Number.isFinite(timestamp)) return;
     this.lastAttemptTime = timestamp;
@@ -127,7 +127,7 @@ class Rss {
     }
   }
 
-  async _resetRateLimitCounter () {
+  async _resetRateLimitCounter() {
     if (!this.rateLimitKey) return;
     try {
       await rateLimiter.reset(this.rateLimitKey);
@@ -137,7 +137,7 @@ class Rss {
     }
   }
 
-  async _batchRejectTorrents (torrents, reason) {
+  async _batchRejectTorrents(torrents, reason) {
     if (!torrents || torrents.length === 0) return;
     const nowTime = moment().unix();
     const rows = torrents.map((torrent) => [
@@ -156,7 +156,7 @@ class Rss {
     }
   }
 
-  _all (str, keys) {
+  _all(str, keys) {
     if (!keys || keys.length === 0) return true;
     for (const key of keys) {
       if (str.indexOf(key) === -1) return false;
@@ -164,7 +164,7 @@ class Rss {
     return true;
   };
 
-  _sum (arr) {
+  _sum(arr) {
     let sum = 0;
     for (const item of arr) {
       sum += item;
@@ -172,11 +172,11 @@ class Rss {
     return sum;
   }
 
-  _getSum (a, b) {
+  _getSum(a, b) {
     return a + b;
   };
 
-  async _downloadTorrent (url, _hash) {
+  async _downloadTorrent(url, _hash) {
     if (_hash && fs.existsSync(path.join(__dirname, '../../torrents', _hash + '.torrent'))) {
       return { hash: _hash, filepath: path.join(__dirname, '../../torrents', _hash + '.torrent') };
     }
@@ -208,54 +208,54 @@ class Rss {
     };
   };
 
-  _fitConditions (_torrent, conditions) {
+  _fitConditions(_torrent, conditions) {
     let fit = true;
     const torrent = { ..._torrent };
     torrent.description = torrent.description || '';
     for (const condition of conditions) {
       let value;
       switch (condition.compareType) {
-      case 'equals':
-        fit = fit && (torrent[condition.key] === condition.value || torrent[condition.key] === +condition.value);
-        break;
-      case 'bigger':
-        value = 1;
-        condition.value.split('*').forEach(item => {
-          value *= +item;
-        });
-        fit = fit && torrent[condition.key] > value;
-        break;
-      case 'smaller':
-        value = 1;
-        condition.value.split('*').forEach(item => {
-          value *= +item;
-        });
-        fit = fit && torrent[condition.key] < value;
-        break;
-      case 'contain':
-        fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length !== 0;
-        break;
-      case 'includeIn':
-        fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) !== -1;
-        break;
-      case 'notContain':
-        fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length === 0;
-        break;
-      case 'notIncludeIn':
-        fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) === -1;
-        break;
-      case 'regExp':
-        fit = fit && (torrent[condition.key] + '').match(new RegExp(condition.value, 'ig'));
-        break;
-      case 'notRegExp':
-        fit = fit && !(torrent[condition.key] + '').match(new RegExp(condition.value, 'ig'));
-        break;
+        case 'equals':
+          fit = fit && (torrent[condition.key] === condition.value || torrent[condition.key] === +condition.value);
+          break;
+        case 'bigger':
+          value = 1;
+          condition.value.split('*').forEach(item => {
+            value *= +item;
+          });
+          fit = fit && torrent[condition.key] > value;
+          break;
+        case 'smaller':
+          value = 1;
+          condition.value.split('*').forEach(item => {
+            value *= +item;
+          });
+          fit = fit && torrent[condition.key] < value;
+          break;
+        case 'contain':
+          fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length !== 0;
+          break;
+        case 'includeIn':
+          fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) !== -1;
+          break;
+        case 'notContain':
+          fit = fit && condition.value.split(',').filter(item => torrent[condition.key].indexOf(item) !== -1).length === 0;
+          break;
+        case 'notIncludeIn':
+          fit = fit && condition.value.split(',').indexOf(torrent[condition.key]) === -1;
+          break;
+        case 'regExp':
+          fit = fit && (torrent[condition.key] + '').match(new RegExp(condition.value, 'ig'));
+          break;
+        case 'notRegExp':
+          fit = fit && !(torrent[condition.key] + '').match(new RegExp(condition.value, 'ig'));
+          break;
       }
     }
     return fit;
   }
 
-  _fitRule (_rule, _torrent) {
+  _fitRule(_rule, _torrent) {
     const rule = { ..._rule };
     const torrent = { ..._torrent };
     if (rule.type === 'javascript') {
@@ -276,16 +276,16 @@ class Rss {
     }
   }
 
-  destroy () {
+  destroy() {
     logger.info('销毁 Rss 实例:', this.alias);
     this.rssJob.stop();
     delete this.rssJob;
     this.clearCount.stop();
     delete this.clearCount;
-    
+
     // 设置实例为非运行状态
     this.isRunning = false;
-    
+
     // 清理任务队列中的阻塞状态
     if (this.taskQueue) {
       try {
@@ -295,7 +295,7 @@ class Rss {
         logger.error(`清理RSS源 ${this.alias} 任务队列失败:`, error);
       }
     }
-    
+
     delete global.runningRss[this.id];
   }
 
@@ -316,17 +316,17 @@ class Rss {
       // 缓存种子hash
       const hashKey = `vertex:client_torrent:${clientId}:hash:${torrent.hash}`;
       await redis.setWithExpire(hashKey, '1', expireTime);
-      
+
       // 缓存种子大小
       const sizeKey = `vertex:client_torrent:${clientId}:size:${torrent.size}`;
       await redis.setWithExpire(sizeKey, torrent.hash, expireTime);
-      
+
       logger.debug(this.alias, `缓存种子到客户端 ${clientId}, Hash: ${torrent.hash}, Size: ${util.formatSize(torrent.size)}, 名称: ${torrent.name?.substring(0, 30)}..., 过期时间: ${expireTime}秒`);
     } catch (err) {
       logger.error(this.alias, `缓存种子到Redis失败: ${err.message}`);
     }
   }
-  
+
   /**
    * 检查客户端是否已存在相同的种子（通过hash或size）
    * @param {string} clientId - 下载器ID
@@ -344,18 +344,18 @@ class Rss {
       // 检查hash是否存在
       const hashKey = `vertex:client_torrent:${clientId}:hash:${torrent.hash}`;
       const hashExists = await redis.get(hashKey);
-      
+
       if (hashExists) {
         return {
           exists: true,
           reason: '拒绝原因: 种子已添加过'
         };
       }
-      
+
       // 检查size是否存在
       const sizeKey = `vertex:client_torrent:${clientId}:size:${torrent.size}`;
       const sizeExists = await redis.get(sizeKey);
-      
+
       if (sizeExists) {
         return {
           exists: true,
@@ -363,7 +363,7 @@ class Rss {
           existingHash: sizeExists
         };
       }
-      
+
       return null;
     } catch (err) {
       logger.error(this.alias, `检查客户端种子存在性失败: ${err.message}`);
@@ -371,20 +371,20 @@ class Rss {
     }
   }
 
-  reloadRssRule () {
+  reloadRssRule() {
     logger.info('重新载入 Rss 规则', this.alias);
     this.acceptRules = util.listRssRule().filter(item => (this._acceptRules.indexOf(item.id) !== -1)).sort((a, b) => +b.priority - +a.priority);
     this.rejectRules = util.listRssRule().filter(item => (this._rejectRules.indexOf(item.id) !== -1)).sort((a, b) => +b.priority - +a.priority);
   }
 
-  reloadPush () {
+  reloadPush() {
     logger.info('Rss', this.alias, '重新载入推送方式');
     this.notify = util.listPush().filter(item => item.id === this._rss.notify)[0] || {};
     this.notify.push = this._rss.pushNotify;
     this.ntf = new Push(this.notify);
   }
 
-  async _pushTorrent (torrent, _client) {
+  async _pushTorrent(torrent, _client) {
     const records = { noteRows: [], noteCategoryRows: [], addRows: [] };
     const pushNoteRow = (target, reason, recordType = 2, clientId) => {
       const nowTime = moment().unix();
@@ -556,28 +556,28 @@ class Rss {
           await this.ntf.rejectTorrent(this._rss, client, torrent, existCheck.reason);
           return records;
         }
-        
+
         // 2. 检查数据库中是否有相同哈希的种子（仅检查哈希完全匹配 - 10分钟内）
         const checkTime = 600; // 10分钟
         const sameTorrent = await util.getRecord(
-          'SELECT * FROM torrents WHERE hash = ? AND add_time > ? AND record_type = 1', 
+          'SELECT * FROM torrents WHERE hash = ? AND add_time > ? AND record_type = 1',
           [torrent.hash, moment().unix() - checkTime]
         );
-        
+
         if (sameTorrent && sameTorrent.id) {
           const reason = '拒绝原因: 种子已添加过';
           pushNoteRow(torrent, reason, 2, client.id);
           await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
           return records;
         }
-        
+
         // 3. 作为后备，检查最终选定的客户端中是否有相同大小的种子
         if (client && client.maindata && client._client.type === 'qBittorrent') {
           for (const _torrent of client.maindata.torrents) {
             if (+_torrent.size === +torrent.size) {
               // 将这个种子也缓存到Redis中，防止下次重复检查
               await this.cacheTorrentToClient(client.id, _torrent);
-              
+
               const reason = '拒绝原因: 下载器中已存在同大小种子';
               pushNoteRow(torrent, reason, 2, client.id);
               await this.ntf.rejectTorrent(this._rss, client, torrent, reason);
@@ -605,14 +605,14 @@ class Rss {
             await client.addTorrent(torrent.url, torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
           }
         }
-        
+
         // 将种子添加到Redis缓存，用于跳过相同种子检查
         await this.cacheTorrentToClient(client.id, torrent);
         if (truehash && torrent.hash !== truehash) {
           // 如果有真实hash不同于原始hash，也缓存它
           await this.cacheTorrentToClient(client.id, { ...torrent, hash: truehash });
         }
-        
+
         try {
           await this.ntf.addTorrent(this._rss, client, torrent);
         } catch (e) {
@@ -637,7 +637,7 @@ class Rss {
     return records;
   }
 
-  async rss (_torrents) {
+  async rss(_torrents) {
     if (this.lastRssTimeReady) {
       await this.lastRssTimeReady;
       this.lastRssTimeReady = null;
@@ -652,7 +652,7 @@ class Rss {
     }
     const startTime = moment();
     logger.debug(this.alias, 'RSS任务开始执行');
-    
+
     let torrents = [];
     if (_torrents) {
       torrents = _torrents;
@@ -680,7 +680,7 @@ class Rss {
         logger.error(this.alias, error.message);
         throw error;
       }
-      
+
       // 根据hash去重，防止不同URL源提供相同种子
       const uniqueTorrents = [];
       const hashSet = new Set();
@@ -692,9 +692,9 @@ class Rss {
       }
       torrents = uniqueTorrents;
     }
-    
+
     logger.debug(this.alias, `获取种子完成，耗时: ${moment().diff(startTime, 'seconds')}秒，数量: ${torrents.length}`);
-    
+
     // 过滤掉已处理和被冻结的种子和超过每小时推送上限的种子
     let newTorrents = [];
 
@@ -714,7 +714,7 @@ class Rss {
         }
       }
     }
-    
+
     // 过滤种子
     const rejectedRuleRows = [];
     for (const torrent of torrents) {
@@ -722,7 +722,7 @@ class Rss {
       if (torrent.hash && existingHashes.has(torrent.hash)) continue;
       // 检查是否被冻结
       if (torrent.name.indexOf('[FROZEN]') !== -1) continue;
-      
+
       // 检查拒绝规则
       let reject = false;
       for (const rejectRule of this.rejectRules) {
@@ -743,21 +743,21 @@ class Rss {
         }
       }
       if (reject) continue;
-      
+
       newTorrents.push(torrent);
     }
     if (rejectedRuleRows.length > 0) {
       await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)', rejectedRuleRows);
     }
-    
+
     logger.debug(this.alias, `种子过滤完成，耗时: ${moment().diff(startTime, 'seconds')}秒，有效数量: ${newTorrents.length}`);
-    
+
     // 如果没有有效种子，直接返回
     if (newTorrents.length === 0) {
       await this._persistLastRssTime(moment().unix());
       return;
     }
-    
+
     // 获取所有可用的下载器
     const availableClients = this.clientArr
       .map(item => global.runningClient[item])
@@ -773,7 +773,7 @@ class Rss {
           (!item.maxLeechNum || item.maxLeechNum > item.maindata.leechingCount) &&
           (!item.minFreeSpace || item.minFreeSpace < item.maindata.freeSpaceOnDisk);
       });
-    
+
     // 将"无可用下载器"判断移至过滤后，只对需要处理的种子记录错误
     if (availableClients.length === 0) {
       logger.error(this.alias, '无可用下载器');
@@ -816,191 +816,191 @@ class Rss {
         return;
       }
     }
-    
+
     // 智能分配种子到下载器
     const clientAssignments = {};
-    
+
     // 计算下载器的权重（考虑最大上传速度）
     const clientWeights = {};
-    
+
     // 计算所有下载器的最大上传速度总和，用于归一化权重
     const totalMaxUploadSpeed = availableClients.reduce((sum, client) => {
-      // 如果客户端未设置最大上传速度，默认为10Gbps (约1250MB/s)
-      const speed = client.maxUploadSpeed || 1250000000;
+      // 使用下载器配置的上传带宽，默认 1Gbps
+      const speed = client.uploadBandwidth || 125000000;
       return sum + speed;
     }, 0);
-    
+
     // 为所有下载器计算权重
     const minWeight = 0.5;
     const maxWeight = 10; // 从5增加到10，扩大区分度
     availableClients.forEach(client => {
-      // 计算客户端权重（基于最大上传速度）
-      const clientSpeed = client.maxUploadSpeed || 1250000000;
+      // 计算客户端权重（基于上传带宽）
+      const clientSpeed = client.uploadBandwidth || 125000000;
       // 使用平方根映射代替线性映射，更合理地反映带宽差异
       const uploadSpeedWeight = Math.sqrt(clientSpeed) / Math.sqrt(totalMaxUploadSpeed);
       // 权重值在0.5到10之间浮动，避免极端值
       clientWeights[client.id] = minWeight + uploadSpeedWeight * (maxWeight - minWeight);
-      
-      logger.debug(`下载器: ${client.alias}, 最大上传速度: ${util.formatSize(clientSpeed)}/s, 平方根权重比: ${uploadSpeedWeight.toFixed(4)}, 最终权重: ${clientWeights[client.id].toFixed(2)}`);
+
+      logger.debug(`下载器: ${client.alias}, 上传带宽: ${util.formatSize(clientSpeed)}/s, 平方根权重比: ${uploadSpeedWeight.toFixed(4)}, 最终权重: ${clientWeights[client.id].toFixed(2)}`);
     });
-    
+
     // 当排序规则是"当前剩余空间"时，进行高带宽优先的智能分配
     if (this.clientSortBy === 'freeSpaceOnDisk') {
       const clientTotalSize = {};
       const clientTorrentCount = {};
-      
+
       // 计算每个下载器的实际可用空间（考虑已使用空间的20%可能会被释放）
       const clientAvailableSpace = {};
-      
+
       // 存储介质分类 (HDD/SSD)
       const storageType = {};
-      
+
       // 识别高带宽客户端 (>=2Gbps, 约250MB/s)
       const highBandwidthThreshold = 250000000;
       const highBandwidthClients = [];
       const normalBandwidthClients = [];
-      
+
       // 计算客户端的真实带宽（因为用户设置的是10倍于实际值）
       const realBandwidth = {};
-      
+
       availableClients.forEach(client => {
-        // 估算真实带宽（除以10，因为用户说设置为实际的10倍）
-        const estimatedRealBandwidth = client.maxUploadSpeed ? client.maxUploadSpeed / 10 : 125000000; // 默认1Gbps
+        // 直接使用上传带宽作为实际带宽
+        const estimatedRealBandwidth = client.uploadBandwidth || 125000000; // 默认1Gbps
         realBandwidth[client.id] = estimatedRealBandwidth;
-        
-                 // 识别存储介质类型（优先从别名判断，再考虑空间大小）
-         // 客户端别名中包含hdd字样的视为HDD，包含ssd字样的视为SSD
-         // 如果别名没有明确标识，则大于1TB认为是HDD
-         let isHDD = false;
-         if (client.alias) {
-           const lowerAlias = client.alias.toLowerCase();
-           if (lowerAlias.includes('hdd')) {
-             isHDD = true;
-           } else if (lowerAlias.includes('ssd')) {
-             isHDD = false;
-           } else {
-             // 没有明确标识时，按照空间大小判断
-             isHDD = client.maindata.freeSpaceOnDisk > 1000 * 1024 * 1024 * 1024;
-           }
-         } else {
-           // 没有别名时，按照空间大小判断
-           isHDD = client.maindata.freeSpaceOnDisk > 1000 * 1024 * 1024 * 1024;
-         }
-         storageType[client.id] = isHDD ? 'HDD' : 'SSD';
-        
+
+        // 识别存储介质类型（优先从别名判断，再考虑空间大小）
+        // 客户端别名中包含hdd字样的视为HDD，包含ssd字样的视为SSD
+        // 如果别名没有明确标识，则大于1TB认为是HDD
+        let isHDD = false;
+        if (client.alias) {
+          const lowerAlias = client.alias.toLowerCase();
+          if (lowerAlias.includes('hdd')) {
+            isHDD = true;
+          } else if (lowerAlias.includes('ssd')) {
+            isHDD = false;
+          } else {
+            // 没有明确标识时，按照空间大小判断
+            isHDD = client.maindata.freeSpaceOnDisk > 1000 * 1024 * 1024 * 1024;
+          }
+        } else {
+          // 没有别名时，按照空间大小判断
+          isHDD = client.maindata.freeSpaceOnDisk > 1000 * 1024 * 1024 * 1024;
+        }
+        storageType[client.id] = isHDD ? 'HDD' : 'SSD';
+
         // 根据带宽分类
         if (estimatedRealBandwidth >= highBandwidthThreshold) {
           highBandwidthClients.push(client);
         } else {
           normalBandwidthClients.push(client);
         }
-        
+
         // 已使用空间的20%可能会被自动删种释放
         const potentialReleaseSpace = (client.maindata.usedSpace || 0) * 0.2;
         // 实际可用空间 = 当前剩余空间 + 潜在可释放空间
         clientAvailableSpace[client.id] = client.maindata.freeSpaceOnDisk + potentialReleaseSpace;
-        
+
         logger.debug(`下载器: ${client.alias}, 类型: ${storageType[client.id]}, 实际带宽: ${util.formatSize(estimatedRealBandwidth)}/s, ` +
-                    `当前剩余空间: ${util.formatSize(client.maindata.freeSpaceOnDisk)}, ` +
-                    `已使用空间: ${util.formatSize(client.maindata.usedSpace || 0)}, ` +
-                    `潜在可释放空间: ${util.formatSize(potentialReleaseSpace)}, ` +
-                    `计算后可用空间: ${util.formatSize(clientAvailableSpace[client.id])}`);
+          `当前剩余空间: ${util.formatSize(client.maindata.freeSpaceOnDisk)}, ` +
+          `已使用空间: ${util.formatSize(client.maindata.usedSpace || 0)}, ` +
+          `潜在可释放空间: ${util.formatSize(potentialReleaseSpace)}, ` +
+          `计算后可用空间: ${util.formatSize(clientAvailableSpace[client.id])}`);
       });
-      
+
       // 初始化客户端分配统计
       availableClients.forEach(client => {
         clientAssignments[client.id] = [];
         clientTotalSize[client.id] = 0;
         clientTorrentCount[client.id] = 0;
       });
-      
+
       // 种子分类和排序
       // 1. 按大小分类：小型种子(<5GB)、中型种子(5GB-50GB)、大型种子(>50GB)
       const smallTorrents = [];
       const mediumTorrents = [];
       const largeTorrents = [];
-      
+
       // 2. 估计种子热度（基于大小）
       const torrentHotness = {};
-      
-       // 收集种子信息用于智能分配
-       newTorrents.forEach(torrent => {
-         // 由于这些是保种区种子，发布时间较长但做种人数少
-         // 不考虑新鲜度，主要根据体积大小评估热度
-         
-         // 热度计算：
-         // 1. 体积评分(0-10)：小体积种子更容易获得更多上传量
-         const sizeGB = +torrent.size / (1024 * 1024 * 1024);
-         // 小于5GB获得10分，5-20GB线性降至5分，>20GB降低更快
-         let sizeScore = 0;
-         if (sizeGB <= 5) {
-           sizeScore = 10; // 极小种子最高分
-         } else if (sizeGB <= 20) {
-           sizeScore = 10 - ((sizeGB - 5) / 15) * 5; // 5-20GB线性降至5分
-         } else {
-           sizeScore = 5 - Math.min(5, (sizeGB - 20) / 60 * 5); // 20-80GB线性降至0分
-         }
-         
-         // 2. 保种价值评分(0-5)：考虑特殊因素
-         // 注: 这里可以添加更多特征判断，如种子名称中包含特定关键词等
-         let preserveScore = 3; // 默认中等保种价值
-         
-         // 如果种子名称中包含某些特殊关键词，可能表明它更有价值
-         if (torrent.name) {
-           const lowerName = torrent.name.toLowerCase();
-           // 举例：包含特定分辨率、稀有资源等关键词可能更有价值
-           if (lowerName.includes('1080p') || lowerName.includes('电视剧')) {
-             preserveScore += 1;
-           }
-         }
-         
-         // 总热度得分
-         torrentHotness[torrent.hash] = sizeScore + preserveScore;
-        
-                 // 使用前面计算的sizeGB进行种子分类
-         if (sizeGB < 5) {
-           smallTorrents.push(torrent);
-         } else if (sizeGB < 50) {
-           mediumTorrents.push(torrent);
-         } else {
-           largeTorrents.push(torrent);
-         }
+
+      // 收集种子信息用于智能分配
+      newTorrents.forEach(torrent => {
+        // 由于这些是保种区种子，发布时间较长但做种人数少
+        // 不考虑新鲜度，主要根据体积大小评估热度
+
+        // 热度计算：
+        // 1. 体积评分(0-10)：小体积种子更容易获得更多上传量
+        const sizeGB = +torrent.size / (1024 * 1024 * 1024);
+        // 小于5GB获得10分，5-20GB线性降至5分，>20GB降低更快
+        let sizeScore = 0;
+        if (sizeGB <= 5) {
+          sizeScore = 10; // 极小种子最高分
+        } else if (sizeGB <= 20) {
+          sizeScore = 10 - ((sizeGB - 5) / 15) * 5; // 5-20GB线性降至5分
+        } else {
+          sizeScore = 5 - Math.min(5, (sizeGB - 20) / 60 * 5); // 20-80GB线性降至0分
+        }
+
+        // 2. 保种价值评分(0-5)：考虑特殊因素
+        // 注: 这里可以添加更多特征判断，如种子名称中包含特定关键词等
+        let preserveScore = 3; // 默认中等保种价值
+
+        // 如果种子名称中包含某些特殊关键词，可能表明它更有价值
+        if (torrent.name) {
+          const lowerName = torrent.name.toLowerCase();
+          // 举例：包含特定分辨率、稀有资源等关键词可能更有价值
+          if (lowerName.includes('1080p') || lowerName.includes('电视剧')) {
+            preserveScore += 1;
+          }
+        }
+
+        // 总热度得分
+        torrentHotness[torrent.hash] = sizeScore + preserveScore;
+
+        // 使用前面计算的sizeGB进行种子分类
+        if (sizeGB < 5) {
+          smallTorrents.push(torrent);
+        } else if (sizeGB < 50) {
+          mediumTorrents.push(torrent);
+        } else {
+          largeTorrents.push(torrent);
+        }
       });
-      
+
       // 对每个分类的种子按热度排序
       smallTorrents.sort((a, b) => torrentHotness[b.hash] - torrentHotness[a.hash]);
       mediumTorrents.sort((a, b) => torrentHotness[b.hash] - torrentHotness[a.hash]);
       largeTorrents.sort((a, b) => torrentHotness[b.hash] - torrentHotness[a.hash]);
-      
+
       // 设置分配比例：高带宽客户端应该获得更多的热门小种子
       const highBandwidthSmallTorrentRatio = highBandwidthClients.length > 0 ? 0.8 : 0;
       const highBandwidthMediumTorrentRatio = highBandwidthClients.length > 0 ? 0.5 : 0;
-      
+
       // 智能分配函数
       const allocateTorrents = async (torrents, highBwRatio = 0, preferredStorageType = null) => {
         // 计算分配给高带宽客户端的种子数量
         const highBwCount = Math.ceil(torrents.length * highBwRatio);
-        
+
         // 分配给高带宽客户端的种子
         const highBwTorrents = torrents.slice(0, highBwCount);
         // 分配给普通带宽客户端的种子
         const normalBwTorrents = torrents.slice(highBwCount);
-        
+
         // 1. 给高带宽客户端分配热度较高的种子
         if (highBwTorrents.length > 0 && highBandwidthClients.length > 0) {
           // 按带宽降序排列高带宽客户端
-          const sortedHighBwClients = [...highBandwidthClients].sort((a, b) => 
+          const sortedHighBwClients = [...highBandwidthClients].sort((a, b) =>
             realBandwidth[b.id] - realBandwidth[a.id]
           );
-          
+
           // 平均分配策略
           let currentClientIndex = 0;
-          
+
           for (const torrent of highBwTorrents) {
             // 循环选择高带宽客户端
             let assigned = false;
             let startIndex = currentClientIndex;
-            
+
             do {
               const client = sortedHighBwClients[currentClientIndex];
               // 检查是否有足够空间
@@ -1009,18 +1009,18 @@ class Rss {
                 clientTotalSize[client.id] += +torrent.size;
                 clientTorrentCount[client.id]++;
                 assigned = true;
-                
+
                 logger.debug(`高带宽分配: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给高带宽下载器 ${client.alias} (${util.formatSize(realBandwidth[client.id])}/s)`);
-                
+
                 // 移动到下一个客户端
                 currentClientIndex = (currentClientIndex + 1) % sortedHighBwClients.length;
                 break;
               }
-              
+
               // 尝试下一个客户端
               currentClientIndex = (currentClientIndex + 1) % sortedHighBwClients.length;
             } while (currentClientIndex !== startIndex);
-            
+
             // 如果无法分配给高带宽客户端，添加到常规带宽种子列表
             if (!assigned) {
               normalBwTorrents.push(torrent);
@@ -1030,80 +1030,80 @@ class Rss {
           // 如果没有高带宽客户端可用，将所有种子添加到常规列表
           normalBwTorrents.push(...highBwTorrents);
         }
-        
+
         // 2. 给普通带宽客户端分配剩余种子（考虑存储类型偏好）
         if (normalBwTorrents.length > 0) {
           // 如果指定了存储类型偏好，优先使用该类型的客户端
           let priorityClients = availableClients;
           let fallbackClients = [];
-          
+
           if (preferredStorageType) {
-            priorityClients = availableClients.filter(client => 
+            priorityClients = availableClients.filter(client =>
               storageType[client.id] === preferredStorageType
             );
-            fallbackClients = availableClients.filter(client => 
+            fallbackClients = availableClients.filter(client =>
               storageType[client.id] !== preferredStorageType
             );
           }
-          
+
           // 合并已分配种子到跳过列表
           const skippedTorrents = [];
           const rejectedNoSpace = [];
-          
+
           // 先尝试分配到首选客户端
           for (const torrent of normalBwTorrents) {
             // 找到符合条件的客户端（考虑空间和分配平衡）
-            const eligibleClients = priorityClients.filter(client => 
+            const eligibleClients = priorityClients.filter(client =>
               clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
             );
-            
+
             if (eligibleClients.length === 0) {
               // 无符合条件的首选客户端，添加到跳过列表
               skippedTorrents.push(torrent);
               continue;
             }
-            
+
             // 优先分配给已分配种子数量/权重比最低的客户端
-            eligibleClients.sort((a, b) => 
-              (clientTorrentCount[a.id] / clientWeights[a.id]) - 
+            eligibleClients.sort((a, b) =>
+              (clientTorrentCount[a.id] / clientWeights[a.id]) -
               (clientTorrentCount[b.id] / clientWeights[b.id])
             );
-            
+
             // 分配种子
             const selectedClient = eligibleClients[0];
             clientAssignments[selectedClient.id].push(torrent);
             clientTotalSize[selectedClient.id] += +torrent.size;
             clientTorrentCount[selectedClient.id]++;
-            
+
             logger.debug(`普通分配: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给下载器 ${selectedClient.alias} (${storageType[selectedClient.id]}, ${util.formatSize(realBandwidth[selectedClient.id])}/s)`);
           }
-          
+
           // 尝试将跳过的种子分配给备选客户端
           if (skippedTorrents.length > 0 && fallbackClients.length > 0) {
             logger.debug(this.alias, `有 ${skippedTorrents.length} 个种子无法分配给首选${preferredStorageType}客户端，尝试分配给备选客户端`);
-            
+
             for (const torrent of skippedTorrents) {
               // 找到符合条件的备选客户端
-              const eligibleClients = fallbackClients.filter(client => 
+              const eligibleClients = fallbackClients.filter(client =>
                 clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size
               );
-              
+
               if (eligibleClients.length === 0) {
                 // 记录无法分配的种子
                 logger.warn(this.alias, `种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 无法分配，所有下载器空间不足`);
                 rejectedNoSpace.push(torrent);
                 continue;
               }
-              
+
               // 优先考虑带宽较高的备选客户端
               eligibleClients.sort((a, b) => realBandwidth[b.id] - realBandwidth[a.id]);
-              
+
               // 分配种子
               const selectedClient = eligibleClients[0];
               clientAssignments[selectedClient.id].push(torrent);
               clientTotalSize[selectedClient.id] += +torrent.size;
               clientTorrentCount[selectedClient.id]++;
-              
+
               logger.debug(`备选分配: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给备选下载器 ${selectedClient.alias} (${storageType[selectedClient.id]}, ${util.formatSize(realBandwidth[selectedClient.id])}/s)`);
             }
           } else if (skippedTorrents.length > 0) {
@@ -1118,32 +1118,32 @@ class Rss {
           }
         }
       };
-      
+
       // 根据种子大小和客户端特性进行优化分配
       logger.debug(this.alias, `开始基于带宽和存储类型的智能分配，小型种子: ${smallTorrents.length}，中型种子: ${mediumTorrents.length}，大型种子: ${largeTorrents.length}`);
-      
+
       // 顺序执行各类种子的分配
       // 1. 小型种子（优先分配给高带宽客户端，尤其是SSD客户端）
       await allocateTorrents(smallTorrents, highBandwidthSmallTorrentRatio, 'SSD');
-      
+
       // 2. 中型种子（部分分配给高带宽客户端，SSD和HDD均可）
       await allocateTorrents(mediumTorrents, highBandwidthMediumTorrentRatio);
-      
+
       // 3. 大型种子（优先分配给HDD客户端，适合长期做种）
       await allocateTorrents(largeTorrents, 0, 'HDD');
-      
+
       // 输出分配统计信息到日志
       logger.debug(this.alias, '带宽和存储类型优化的分配结果:');
       for (const clientId in clientTorrentCount) {
         const client = global.runningClient[clientId];
         const spaceUtilization = ((clientTotalSize[clientId] / clientAvailableSpace[clientId]) * 100).toFixed(2);
         logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
-                    `存储类型: ${storageType[clientId]}, ` +
-                    `实际带宽: ${util.formatSize(realBandwidth[clientId])}/s, ` +
-                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
-                    `总大小: ${util.formatSize(clientTotalSize[clientId])}, ` +
-                    `空间利用率: ${spaceUtilization}%, ` +
-                    `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
+          `存储类型: ${storageType[clientId]}, ` +
+          `实际带宽: ${util.formatSize(realBandwidth[clientId])}/s, ` +
+          `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
+          `总大小: ${util.formatSize(clientTotalSize[clientId])}, ` +
+          `空间利用率: ${spaceUtilization}%, ` +
+          `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
       }
     } else if (this.clientSortBy === 'uploadSpeed') {
       // 专门针对上传速度进行的智能分配 - 综合考虑服务器类型、下载任务数量和实际上传性能
@@ -1161,8 +1161,8 @@ class Rss {
         const isHDD = lowerAlias.includes('hdd');
         const serverType = isVPS ? 'VPS' : (isHDD ? 'HDD独服' : 'SSD独服');
 
-        // 真实带宽 = maxUploadSpeed / 10 (因为用户设置为实际的10倍)
-        const realMaxUploadSpeed = client.maxUploadSpeed ? client.maxUploadSpeed / 10 : 125000000; // 默认1Gbps
+        // 直接使用上传带宽作为实际带宽
+        const realMaxUploadSpeed = client.uploadBandwidth || 125000000; // 默认 1Gbps
         const currentUploadSpeed = client.maindata.uploadSpeed || 0;
         const downloadingCount = client.maindata.leechingCount || 0;
 
@@ -1207,11 +1207,11 @@ class Rss {
         clientUploadEfficiency[client.id] = efficiencyScore;
 
         logger.debug(`下载器: ${client.alias} (${serverType}), ` +
-                    `真实带宽: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
-                    `当前上传: ${util.formatSize(currentUploadSpeed)}/s, ` +
-                    `剩余带宽: ${util.formatSize(remainingUploadSpeed)}/s, ` +
-                    `下载任务: ${downloadingCount}, ` +
-                    `效率评分: ${efficiencyScore.toFixed(1)} (剩余带宽:${remainingBandwidthScore.toFixed(1)} 负载:${loadScore.toFixed(1)} 稳定性:${stabilityScore.toFixed(1)})`);
+          `真实带宽: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
+          `当前上传: ${util.formatSize(currentUploadSpeed)}/s, ` +
+          `剩余带宽: ${util.formatSize(remainingUploadSpeed)}/s, ` +
+          `下载任务: ${downloadingCount}, ` +
+          `效率评分: ${efficiencyScore.toFixed(1)} (剩余带宽:${remainingBandwidthScore.toFixed(1)} 负载:${loadScore.toFixed(1)} 稳定性:${stabilityScore.toFixed(1)})`);
       });
 
       // 按种子大小从大到小排序，确保大种子优先分配
@@ -1243,8 +1243,8 @@ class Rss {
           clientUploadEfficiency[selectedClient.id] - efficiencyPenalty);
 
         logger.debug(`种子分配: "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) ` +
-                    `分配给下载器 ${selectedClient.alias}, ` +
-                    `效率评分: ${(clientUploadEfficiency[selectedClient.id] + efficiencyPenalty).toFixed(1)} -> ${clientUploadEfficiency[selectedClient.id].toFixed(1)}`);
+          `分配给下载器 ${selectedClient.alias}, ` +
+          `效率评分: ${(clientUploadEfficiency[selectedClient.id] + efficiencyPenalty).toFixed(1)} -> ${clientUploadEfficiency[selectedClient.id].toFixed(1)}`);
       }
 
       // 输出分配统计信息到日志
@@ -1270,12 +1270,12 @@ class Rss {
         const utilizationRate = ((currentUploadSpeed / realMaxUploadSpeed) * 100).toFixed(1);
 
         logger.debug(`下载器: ${client.alias} (${serverType}), ` +
-                    `分配种子数: ${torrentCount}, ` +
-                    `真实带宽: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
-                    `当前上传: ${util.formatSize(currentUploadSpeed)}/s, ` +
-                    `下载任务: ${downloadingCount}, ` +
-                    `利用率: ${utilizationRate}%, ` +
-                    `最终效率评分: ${finalEfficiency.toFixed(1)}`);
+          `分配种子数: ${torrentCount}, ` +
+          `真实带宽: ${util.formatSize(realMaxUploadSpeed)}/s, ` +
+          `当前上传: ${util.formatSize(currentUploadSpeed)}/s, ` +
+          `下载任务: ${downloadingCount}, ` +
+          `利用率: ${utilizationRate}%, ` +
+          `最终效率评分: ${finalEfficiency.toFixed(1)}`);
       }
 
       // 输出分配总结
@@ -1283,24 +1283,24 @@ class Rss {
       const vpsCount = sortedResults.filter(r => (r.client.alias || '').toLowerCase().includes('vps')).reduce((sum, r) => sum + r.torrentCount, 0);
       const dedicatedCount = totalTorrents - vpsCount;
 
-      logger.info(this.alias, `种子分配完成: 总计 ${totalTorrents} 个种子, VPS分配 ${vpsCount} 个 (${((vpsCount/totalTorrents)*100).toFixed(1)}%), 独服分配 ${dedicatedCount} 个 (${((dedicatedCount/totalTorrents)*100).toFixed(1)}%)`);
+      logger.info(this.alias, `种子分配完成: 总计 ${totalTorrents} 个种子, VPS分配 ${vpsCount} 个 (${((vpsCount / totalTorrents) * 100).toFixed(1)}%), 独服分配 ${dedicatedCount} 个 (${((dedicatedCount / totalTorrents) * 100).toFixed(1)}%)`);
 
     } else {
       // 其他排序规则，使用带宽权重的轮询分配
       const clientTorrentCount = {};
-      
+
       // 初始化客户端分配统计
       availableClients.forEach(client => {
         clientAssignments[client.id] = [];
         clientTorrentCount[client.id] = 0;
       });
-      
+
       // 按照下载器排序方式排序
-      const sortedClients = [...availableClients].sort((a, b) => 
+      const sortedClients = [...availableClients].sort((a, b) =>
         (this.clientSortBy === 'freeSpaceOnDisk' ? -1 : 1) *
         (a.maindata[this.clientSortBy] - b.maindata[this.clientSortBy])
       );
-      
+
       // 计算总权重
       const totalWeight = sortedClients.reduce((sum, client) => sum + clientWeights[client.id], 0);
       // 计算每个下载器应该分配的种子比例
@@ -1308,7 +1308,7 @@ class Rss {
       sortedClients.forEach(client => {
         allocations[client.id] = Math.ceil((clientWeights[client.id] / totalWeight) * newTorrents.length);
       });
-      
+
       // 根据权重分配种子
       let currentIndex = 0;
       for (const client of sortedClients) {
@@ -1319,7 +1319,7 @@ class Rss {
           currentIndex++;
         }
       }
-      
+
       // 如果还有剩余种子，按轮询方式分配
       while (currentIndex < newTorrents.length) {
         for (const client of sortedClients) {
@@ -1332,29 +1332,29 @@ class Rss {
           }
         }
       }
-      
+
       // 输出带权重轮询分配结果
       logger.debug(this.alias, '带权重轮询分配结果:');
       for (const clientId in clientTorrentCount) {
         const client = global.runningClient[clientId];
         logger.debug(`下载器: ${client.alias}, 分配种子数: ${clientTorrentCount[clientId]}, ` +
-                    `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` + 
-                    `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
-                    `权重分配比例: ${Math.round((clientWeights[clientId] / totalWeight) * 100)}%`);
+          `最大上传速度: ${util.formatSize(client.maxUploadSpeed || 0)}/s, ` +
+          `上传速度权重: ${clientWeights[clientId].toFixed(2)}, ` +
+          `权重分配比例: ${Math.round((clientWeights[clientId] / totalWeight) * 100)}%`);
       }
     }
-    
+
     // 处理每个下载器的种子分配（并行处理）
     const allProcessingTasks = [];
     const maxConcurrent = 15; // 每个客户端的最大并发处理数量
     const insertNoteSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?)';
     const insertNoteWithCategorySql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
     const insertAddSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-    
+
     for (const clientId in clientAssignments) {
       const client = global.runningClient[clientId];
       const clientTorrents = clientAssignments[clientId];
-      
+
       // 对每个下载器的种子进行分批并行处理
       const processBatch = async (torrents) => {
         const results = await Promise.all(torrents.map(async (torrent) => {
@@ -1390,22 +1390,22 @@ class Rss {
           await util.runRecords(insertAddSql, addRows);
         }
       };
-      
+
       // 将客户端的种子分批处理
       for (let i = 0; i < clientTorrents.length; i += maxConcurrent) {
         const batch = clientTorrents.slice(i, i + maxConcurrent);
         allProcessingTasks.push(processBatch(batch));
       }
     }
-    
+
     // 等待所有处理任务完成
     await Promise.all(allProcessingTasks);
     logger.info(this.alias, `RSS任务并行处理完成，共处理 ${newTorrents.length} 个种子`);
-    
+
     await this._persistLastRssTime(moment().unix());
   }
 
-  async dryrun () {
+  async dryrun() {
     const torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url)))).flat();
     for (const torrent of torrents) {
       let reject = false;
@@ -1434,7 +1434,7 @@ class Rss {
     return torrents;
   }
 
-  async mikanSearch (name) {
+  async mikanSearch(name) {
     const torrents = await util.mikanSearch(name);
     for (const torrent of torrents) {
       let reject = false;
@@ -1482,42 +1482,42 @@ class Rss {
         setWithExpire: typeof redis.setWithExpire === 'function'
       }
     };
-    
+
     // 测试Redis缓存
     try {
       // 创建测试种子对象
       const testTorrent = { hash, size, name: '测试种子' };
-      
+
       // 测试缓存写入
       await this.cacheTorrentToClient(clientId, testTorrent, 60); // 1分钟过期
       results.cacheStatus.write = 'success';
-      
+
       // 测试缓存读取 - 通过hash
       const hashExists = await this.checkTorrentExistsInClient(clientId, testTorrent);
       results.cacheStatus.readByHash = hashExists && hashExists.exists ? 'success' : 'failed';
-      
+
       // 测试缓存读取 - 通过size
       const sizeExists = await redis.get(`vertex:client_torrent:${clientId}:size:${size}`);
       results.cacheStatus.readBySize = sizeExists ? 'success' : 'failed';
-      
+
       // 测试缓存过期时间
       const ttlHash = await redis.ttl(`vertex:client_torrent:${clientId}:hash:${hash}`);
       const ttlSize = await redis.ttl(`vertex:client_torrent:${clientId}:size:${size}`);
       results.cacheStatus.ttlHash = ttlHash;
       results.cacheStatus.ttlSize = ttlSize;
-      
+
       // 测试缓存删除
       await redis.del(`vertex:client_torrent:${clientId}:hash:${hash}`);
       await redis.del(`vertex:client_torrent:${clientId}:size:${size}`);
       const afterDeleteHash = await redis.get(`vertex:client_torrent:${clientId}:hash:${hash}`);
       results.cacheStatus.delete = !afterDeleteHash ? 'success' : 'failed';
-      
+
       results.cacheStatus.status = 'success';
     } catch (e) {
       results.cacheStatus.error = e.message;
       results.cacheStatus.status = 'error';
     }
-    
+
     return results;
   }
 

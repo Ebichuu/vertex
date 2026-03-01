@@ -226,6 +226,34 @@
           </a-input>
         </a-form-item>
         <a-form-item
+          label="上传带宽"
+          name="uploadBandwidth"
+          extra="下载器的实际上传带宽，用于智能分配计算，默认 1Gbps">
+          <a-input size="small" v-model:value="downloader.uploadBandwidth">
+            <template #addonAfter>
+              <a-select size="small" v-model:value="downloader.uploadBandwidthUnit" placeholder="选择单位" style="width: 120px">
+                <a-select-option value="KiB">KiB/s</a-select-option>
+                <a-select-option value="MiB">MiB/s</a-select-option>
+                <a-select-option value="GiB">GiB/s</a-select-option>
+              </a-select>
+            </template>
+          </a-input>
+        </a-form-item>
+        <a-form-item
+          label="下载带宽"
+          name="downloadBandwidth"
+          extra="下载器的实际下载带宽，用于智能分配计算，默认 1Gbps">
+          <a-input size="small" v-model:value="downloader.downloadBandwidth">
+            <template #addonAfter>
+              <a-select size="small" v-model:value="downloader.downloadBandwidthUnit" placeholder="选择单位" style="width: 120px">
+                <a-select-option value="KiB">KiB/s</a-select-option>
+                <a-select-option value="MiB">MiB/s</a-select-option>
+                <a-select-option value="GiB">GiB/s</a-select-option>
+              </a-select>
+            </template>
+          </a-input>
+        </a-form-item>
+        <a-form-item
           label="最小剩余空间"
           name="minFreeSpace"
           extra="若下载器的剩余空间在此空间之下时, 不再添加种子">
@@ -356,7 +384,11 @@ export default {
         autoDeleteCron: '* * * * *',
         autoReannounce: true,
         autoDelete: true,
-        deleteRules: []
+        deleteRules: [],
+        uploadBandwidth: 1,
+        uploadBandwidthUnit: 'GiB',
+        downloadBandwidth: 1,
+        downloadBandwidthUnit: 'GiB'
       },
       loading: true,
       registCode: []
