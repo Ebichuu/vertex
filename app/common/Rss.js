@@ -806,11 +806,12 @@ class Rss {
       if (allowed < newTorrents.length) {
         const acceptableTorrents = newTorrents.slice(0, allowed);
         const rejectedTorrents = newTorrents.slice(allowed);
-        await this._batchRejectTorrents(rejectedTorrents, `拒绝原因: 达到单小时推送上限: ${usedBefore} / ${limit}`);
-        logger.info(this.alias, `每小时推送上限为 ${limit}，当前已推送 ${usedBefore}，本次接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
+        const limitReason = `拒绝原因: 达到单小时推送上限: 本轮前 ${usedBefore} / ${limit}，本轮接受 ${allowed} 个`;
+        await this._batchRejectTorrents(rejectedTorrents, limitReason);
+        logger.info(this.alias, `每小时推送上限为 ${limit}，本轮前已推送 ${usedBefore}，本轮接受 ${acceptableTorrents.length} 个种子，拒绝 ${rejectedTorrents.length} 个种子`);
         newTorrents = acceptableTorrents;
       } else {
-        logger.info(this.alias, `每小时推送上限为 ${limit}，当前已推送 ${usedBefore}，本次接受 ${allowed} 个种子`);
+        logger.info(this.alias, `每小时推送上限为 ${limit}，本轮前已推送 ${usedBefore}，本轮接受 ${allowed} 个种子`);
       }
       if (newTorrents.length === 0) {
         return;
