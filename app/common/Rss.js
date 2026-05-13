@@ -537,8 +537,12 @@ class Rss {
       }
       let fitRule = {};
       if (fitRules.length > 0) {
-        const highestPriority = Math.max(...fitRules.map(rule => +rule.priority));
-        const highestPriorityRules = fitRules.filter(rule => +rule.priority === highestPriority);
+        const getPriority = rule => {
+          const priority = Number(rule.priority);
+          return Number.isFinite(priority) ? priority : 0;
+        };
+        const highestPriority = Math.max(...fitRules.map(getPriority));
+        const highestPriorityRules = fitRules.filter(rule => getPriority(rule) === highestPriority);
         fitRule = highestPriorityRules[Math.floor(Math.random() * highestPriorityRules.length)];
       }
       let savePath = fitRule.savePath || this.savePath;
