@@ -4,8 +4,8 @@ const moment = require('moment');
 class Site {
   constructor () {
     this.name = 'PTerClub';
-    this.downloadLink = 'https://pterclub.com/download.php?id={ID}';
-    this.url = 'https://pterclub.com/';
+    this.downloadLink = 'https://pterclub.net/download.php?id={ID}';
+    this.url = 'https://pterclub.net/';
     this.id = 7;
   };
 
