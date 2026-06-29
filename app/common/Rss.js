@@ -45,6 +45,7 @@ class Rss {
     this.useCustomRegex = rss.useCustomRegex;
     this.regexStr = rss.regexStr;
     this.replaceStr = rss.replaceStr;
+    this.downloadUrlReplaceRules = Array.isArray(rss.downloadUrlReplaceRules) ? rss.downloadUrlReplaceRules : [];
     this.addCountPerHour = +rss.addCountPerHour || 20;
     this.addCount = 0;
     this.pushTorrentFile = rss.pushTorrentFile;
@@ -75,6 +76,38 @@ class Rss {
 
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
+  }
+
+  _getRuleHostname(host) {
+    if (!host) return '';
+    try {
+      return new URL(host.indexOf('://') === -1 ? `http://${host}` : host).hostname.toLowerCase();
+    } catch (e) {
+      return host.toLowerCase();
+    }
+  }
+
+  _normalizeTorrentUrl(url) {
+    let torrentUrl = rss.normalizeTorrentUrl(url);
+    if (!torrentUrl || this.downloadUrlReplaceRules.length === 0) return torrentUrl;
+    try {
+      const parsedUrl = new URL(torrentUrl);
+      const matchedRule = this.downloadUrlReplaceRules.find(rule => rule && rule.from && rule.to && parsedUrl.hostname.toLowerCase() === this._getRuleHostname(rule.from));
+      if (!matchedRule) return torrentUrl;
+      parsedUrl.hostname = this._getRuleHostname(matchedRule.to);
+      return parsedUrl.toString();
+    } catch (e) {
+      return torrentUrl;
+    }
+  }
+
+  _normalizeTorrentUrls(torrents) {
+    torrents.forEach(torrent => {
+      if (torrent && torrent.url) {
+        torrent.url = this._normalizeTorrentUrl(torrent.url);
+      }
+    });
+    return torrents;
   }
 
   async _loadLastRssTime() {
@@ -181,7 +214,7 @@ class Rss {
       return { hash: _hash, filepath: path.join(__dirname, '../../torrents', _hash + '.torrent') };
     }
     const res = await util.requestPromise({
-      url: url,
+      url: this._normalizeTorrentUrl(url),
       method: 'GET',
       encoding: null,
       headers: {
@@ -189,6 +222,11 @@ class Rss {
       }
     });
     const buffer = Buffer.from(res.body, 'utf-8');
+    if (res.statusCode < 200 || res.statusCode >= 300 || buffer[0] !== 100) {
+      const contentType = res.headers['content-type'] || '';
+      const bodyPrefix = buffer.slice(0, 80).toString('utf8').replace(/[\r\n\t]+/g, ' ');
+      throw new Error(`下载种子文件失败: 状态码 ${res.statusCode}, Content-Type ${contentType}, 响应前缀 ${bodyPrefix}`);
+    }
     const torrent = bencode.decode(buffer);
     const size = torrent.info.length || torrent.info.files.map(i => i.length).reduce(this._getSum, 0);
     const fsHash = crypto.createHash('sha1');
@@ -443,11 +481,11 @@ class Rss {
         }
         for (const _torrent of client.maindata.torrents) {
           if (+_torrent.size === +torrent.size && +_torrent.completed === +_torrent.size) {
-            const bencodeInfo = await rss.getTorrentNameByBencode(torrent.url);
+            const bencodeInfo = await rss.getTorrentNameByBencode(this._normalizeTorrentUrl(torrent.url));
             if (_torrent.name === bencodeInfo.name && _torrent.hash !== bencodeInfo.hash) {
               try {
                 this.addCount += 1;
-                await client.addTorrent(torrent.url, torrent.hash, true, this.uploadLimit, this.downloadLimit, _torrent.savePath, this.category);
+                await client.addTorrent(this._normalizeTorrentUrl(torrent.url), torrent.hash, true, this.uploadLimit, this.downloadLimit, _torrent.savePath, this.category);
                 pushAddRow(torrent.hash, torrent, this.category, '辅种', client.id);
                 await this.ntf.addTorrent(this._rss, client, torrent);
                 return records;
@@ -594,19 +632,29 @@ class Rss {
         let truehash = '';
         this.addCount += 1;
         if (this.pushTorrentFile) {
-          const { filepath, hash } = await this._downloadTorrent(torrent.url, torrent.hash);
-          truehash = hash;
-          await client.addTorrentByTorrentFile(filepath, hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
+          let filepath;
+          let hash;
+          try {
+            ({ filepath, hash } = await this._downloadTorrent(torrent.url, torrent.hash));
+          } catch (downloadError) {
+            logger.error(this.alias, '下载种子文件失败，尝试使用链接推送:', downloadError.message);
+            await client.addTorrent(this._normalizeTorrentUrl(torrent.url), torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
+          }
+          if (filepath) {
+            truehash = hash;
+            await client.addTorrentByTorrentFile(filepath, hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
+          }
         } else {
+          const torrentUrl = this._normalizeTorrentUrl(torrent.url);
           if (this.useCustomRegex) {
             const match = this.regexStr.match(/^\/(.*)\/([gimuy]*)$/);
             if (match) {
               const [, pattern, flags] = match;
               const regex = new RegExp(pattern, flags);
-              await client.addTorrent(torrent.url.replace(regex, this.replaceStr), torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
+              await client.addTorrent(torrentUrl.replace(regex, this.replaceStr), torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
             }
           } else {
-            await client.addTorrent(torrent.url, torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
+            await client.addTorrent(torrentUrl, torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
           }
         }
 
@@ -659,7 +707,7 @@ class Rss {
 
     let torrents = [];
     if (_torrents) {
-      torrents = _torrents;
+      torrents = this._normalizeTorrentUrls(_torrents);
     } else {
       // 从多个URL获取种子并合并，单个源失败不中断整体
       const results = await Promise.allSettled(this.urls.map(url => rss.getTorrents(url)));
@@ -694,7 +742,7 @@ class Rss {
           uniqueTorrents.push(torrent);
         }
       }
-      torrents = uniqueTorrents;
+      torrents = this._normalizeTorrentUrls(uniqueTorrents);
     }
 
     logger.debug(this.alias, `获取种子完成，耗时: ${moment().diff(startTime, 'seconds')}秒，数量: ${torrents.length}`);

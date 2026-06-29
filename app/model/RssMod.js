@@ -4,9 +4,16 @@ const Rss = require('../common/Rss');
 
 const util = require('../libs/util');
 class RssMod {
+  _normalizeDownloadUrlReplaceRules (rules) {
+    return (rules || [])
+      .map(rule => ({ from: (rule.from || '').trim(), to: (rule.to || '').trim() }))
+      .filter(rule => rule.from && rule.to);
+  }
+
   add (options) {
     const id = util.uuid.v4().split('-')[0];
     const rssSet = { ...options };
+    rssSet.downloadUrlReplaceRules = this._normalizeDownloadUrlReplaceRules(rssSet.downloadUrlReplaceRules);
     rssSet.id = id;
     fs.writeFileSync(path.join(__dirname, '../data/rss/', id + '.json'), JSON.stringify(rssSet, null, 2));
     if (global.runningRss[id]) global.runningRss[id].destroy();
@@ -27,6 +34,7 @@ class RssMod {
 
   modify (options) {
     const rssSet = { ...options };
+    rssSet.downloadUrlReplaceRules = this._normalizeDownloadUrlReplaceRules(rssSet.downloadUrlReplaceRules);
     rssSet.sameServerClients = rssSet.sameServerClients || [];
     rssSet.reseedClients = rssSet.reseedClients || [];
     fs.writeFileSync(path.join(__dirname, '../data/rss/', options.id + '.json'), JSON.stringify(rssSet, null, 2));
@@ -44,6 +52,7 @@ class RssMod {
       }
       rss.acceptRules = rss.acceptRules || [];
       rss.rejectRules = rss.rejectRules || [];
+      rss.downloadUrlReplaceRules = rss.downloadUrlReplaceRules || [];
     }
     return rssList;
   };
@@ -51,6 +60,7 @@ class RssMod {
   async dryrun (options) {
     const id = util.uuid.v4().split('-')[0];
     const rssSet = { ...options };
+    rssSet.downloadUrlReplaceRules = this._normalizeDownloadUrlReplaceRules(rssSet.downloadUrlReplaceRules);
     rssSet.id = id;
     rssSet.dryrun = true;
     const rss = new Rss(rssSet);

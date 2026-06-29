@@ -148,6 +148,28 @@
           </a-button>
         </a-form-item>
         <a-form-item
+          label="下载链接域名替换"
+          name="downloadUrlReplaceRules"
+          extra="仅替换 RSS 种子下载链接的域名，不影响 RSS 地址、路径和参数。例如 pt.agsvpt.cn -> www.agsvpt.com">
+          <a-form-item-rest v-for="(item, index) in rss.downloadUrlReplaceRules" :key="index">
+            <a-input-group compact>
+              <a-input size="small" v-model:value="rss.downloadUrlReplaceRules[index].from" placeholder="原域名，如 pt.agsvpt.cn" style="width: calc((100% - 64px) / 2)"/>
+              <a-input size="small" v-model:value="rss.downloadUrlReplaceRules[index].to" placeholder="替换为，如 www.agsvpt.com" style="width: calc((100% - 64px) / 2)"/>
+              <a-button
+                type="danger"
+                size="small" @click="() => rss.downloadUrlReplaceRules = rss.downloadUrlReplaceRules.filter((i, ruleIndex) => ruleIndex !== index)"
+                style="width: 64px;">删除</a-button>
+            </a-input-group>
+          </a-form-item-rest>
+          <a-button
+            size="small"
+            type="primary"
+            @click="rss.downloadUrlReplaceRules.push({ from: '', to: '' })"
+            >
+            新增
+          </a-button>
+        </a-form-item>
+        <a-form-item
           label="抓取免费"
           name="scrapeFree"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
@@ -451,7 +473,8 @@ export default {
         acceptRules: [],
         rejectRules: [],
         reseedClients: [],
-        rssUrls: ['']
+        rssUrls: [''],
+        downloadUrlReplaceRules: []
       },
       loading: true,
       registCode: []
@@ -497,9 +520,14 @@ export default {
         this.$message().error(e.message);
       }
     },
+    normalizeDownloadUrlReplaceRules (rules) {
+      return (rules || [])
+        .map(rule => ({ from: (rule.from || '').trim(), to: (rule.to || '').trim() }))
+        .filter(rule => rule.from && rule.to);
+    },
     async modifyRss () {
       try {
-        await this.$api().rss.modify({ ...this.rss });
+        await this.$api().rss.modify({ ...this.rss, downloadUrlReplaceRules: this.normalizeDownloadUrlReplaceRules(this.rss.downloadUrlReplaceRules) });
         this.$message().success((this.rss.id ? '编辑' : '新增') + '成功, 列表正在刷新...');
         setTimeout(() => this.listRss(), 1000);
         this.clearRss();
@@ -518,7 +546,7 @@ export default {
     },
     async enableTask (record) {
       try {
-        await this.$api().rss.modify({ ...record });
+        await this.$api().rss.modify({ ...record, downloadUrlReplaceRules: this.normalizeDownloadUrlReplaceRules(record.downloadUrlReplaceRules) });
         this.$message().success('修改成功, 列表正在刷新...');
         setTimeout(() => this.listRss(), 1000);
         this.clearRss();
@@ -527,7 +555,8 @@ export default {
       }
     },
     modifyClick (row) {
-      this.rss = { ...row };
+      this.rss = JSON.parse(JSON.stringify(row));
+      this.rss.downloadUrlReplaceRules = this.rss.downloadUrlReplaceRules || [];
     },
     cloneClick (row) {
       this.rss = JSON.parse(JSON.stringify(row));
@@ -550,7 +579,8 @@ export default {
         clientArr: [],
         rejectRules: [],
         reseedClients: [],
-        rssUrls: ['']
+        rssUrls: [''],
+        downloadUrlReplaceRules: []
       };
     }
   },

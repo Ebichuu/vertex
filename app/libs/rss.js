@@ -14,6 +14,13 @@ const _getSum = function (a, b) {
   return a + b;
 };
 
+const normalizeTorrentUrl = function (torrentUrl) {
+  if (!torrentUrl) return torrentUrl;
+  return torrentUrl.replace(/&(?:amp|#38|#x26);/ig, '&');
+};
+
+exports.normalizeTorrentUrl = normalizeTorrentUrl;
+
 const _getRssContent = async function (rssUrl, suffix = true) {
   let body;
   const cache = await redis.get(`vertex:rss:${rssUrl}`);
@@ -891,13 +898,16 @@ const _getTorrentsWrapper = {
 exports.getTorrents = async function (rssUrl) {
   const host = new URL(rssUrl).host;
   try {
+    let torrents;
     if (host.indexOf('m-team') !== -1) {
-      return await _getTorrentsMTeam(rssUrl);
+      torrents = await _getTorrentsMTeam(rssUrl);
+    } else if (_getTorrentsWrapper[host]) {
+      torrents = await _getTorrentsWrapper[host](rssUrl);
+    } else {
+      torrents = await _getTorrents(rssUrl);
     }
-    if (_getTorrentsWrapper[host]) {
-      return await _getTorrentsWrapper[host](rssUrl);
-    }
-    return await _getTorrents(rssUrl);
+    torrents.forEach(torrent => { torrent.url = normalizeTorrentUrl(torrent.url); });
+    return torrents;
   } catch (e) {
     logger.error(host, '获取 Rss 报错', e);
     return [];
@@ -906,7 +916,7 @@ exports.getTorrents = async function (rssUrl) {
 
 exports.getTorrentName = async function (url) {
   const res = await util.requestPromise({
-    url: url,
+    url: normalizeTorrentUrl(url),
     method: 'HEAD'
   });
   const dis = res.headers['content-disposition'];
@@ -916,7 +926,7 @@ exports.getTorrentName = async function (url) {
 
 exports.getTorrentNameByBencode = async function (url) {
   const res = await util.requestPromise({
-    url: url,
+    url: normalizeTorrentUrl(url),
     method: 'GET',
     encoding: null
   });
