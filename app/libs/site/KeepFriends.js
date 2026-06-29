@@ -17,15 +17,15 @@ class Site {
     // uid
     info.uid = +document.querySelector('a[href*=userdetails]').href.match(/id=(\d+)/)[1];
     // 上传
-    info.upload = document.querySelector('span[class=color_uploaded]').nextSibling.nodeValue.trim().replace(/(\w)B/, '$1iB');
+    info.upload = document.querySelector('span[class=color_uploaded]').nextSibling.innerHTML.trim();
     info.upload = util.calSize(...info.upload.split(' '));
     // 下载
-    info.download = document.querySelector('span[class=color_downloaded]').nextSibling.nodeValue.trim().replace(/(\w)B/, '$1iB');
+    info.download = document.querySelector('span[class=color_downloaded]').nextSibling.innerHTML.trim();
     info.download = util.calSize(...info.download.split(' '));
     // 做种
-    info.seeding = +document.querySelector('img[class=arrowup]').nextSibling.nodeValue.trim();
+    info.seeding = +document.querySelector('i[title=当前做种]').nextSibling.nodeValue.trim();
     // 下载
-    info.leeching = +document.querySelector('img[class=arrowdown]').nextSibling.nodeValue.trim();
+    info.leeching = +document.querySelector('i[title=当前下载]').nextSibling.nodeValue.trim();
     // 做种体积
     const seedingDocument = await this._getDocument(`${this.index}getusertorrentlistajax.php?userid=${info.uid}&type=seeding`);
     const seedingTorrent = [...seedingDocument.querySelectorAll('tr')];
