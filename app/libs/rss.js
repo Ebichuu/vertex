@@ -21,6 +21,22 @@ const normalizeTorrentUrl = function (torrentUrl) {
 
 exports.normalizeTorrentUrl = normalizeTorrentUrl;
 
+const parseSizeText = function (sizeText) {
+  const match = (sizeText || '').replace(/\u00a0/g, ' ').match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/i);
+  if (!match) return 0;
+  const map = {
+    kib: 1024,
+    mib: 1024 * 1024,
+    gib: 1024 * 1024 * 1024,
+    tib: 1024 * 1024 * 1024 * 1024,
+    kb: 1000,
+    mb: 1000 * 1000,
+    gb: 1000 * 1000 * 1000,
+    tb: 1000 * 1000 * 1000 * 1000
+  };
+  return parseFloat(match[1]) * map[match[2].toLowerCase()];
+};
+
 const _getRssContent = async function (rssUrl, suffix = true) {
   let body;
   const cache = await redis.get(`vertex:rss:${rssUrl}`);
@@ -234,21 +250,14 @@ const _getTorrentsUnit3D2 = async function (rssUrl) {
       url: '',
       link: ''
     };
-    const size = items[i].description[0].match(/Size<\/strong>: (\d*\.\d*|\d*).(GiB|MiB|TiB|KiB)/)[0];
-    const map = {
-      KiB: 1024,
-      MiB: 1024 * 1024,
-      GiB: 1024 * 1024 * 1024,
-      TiB: 1024 * 1024 * 1024 * 1024
-    };
-    const regRes = size.match(/Size<\/strong>: (\d*\.\d*|\d*).(GiB|MiB|TiB|KiB)/);
-    torrent.size = parseFloat(regRes[1]) * map[regRes[2]];
-    torrent.name = items[i].title[0];
+    torrent.size = items[i].contentlength ? parseInt(items[i].contentlength[0]) : parseSizeText(items[i].description && items[i].description[0]);
+    torrent.name = items[i].title[0].trim();
     const link = items[i].link[0];
-    torrent.id = link.match(/download\/(\d*)\./)[1];
+    torrent.id = (link.match(/download\/(\d+)\./) || [])[1] || items[i].guid[0];
     torrent.hash = 'fakehash' + torrent.id + 'fakehash';
     torrent.url = link;
     torrent.link = link.replace(/download\//, '').replace(/(\d+)\..*/, '$1');
+    torrent.pubTime = moment(items[i].pubDate[0]).unix();
     torrents.push(torrent);
   }
   return torrents;
@@ -855,6 +864,7 @@ const _getTorrentsCinematik = async function (rssUrl) {
 
 const _getTorrentsWrapper = {
   'filelist.io': _getTorrentsFileList,
+  'bitporn.eu': _getTorrentsUnit3D2,
   'blutopia.cc': _getTorrentsUnit3D2,
   'jptv.club': _getTorrentsUnit3D,
   'anime-no-index.com': _getTorrentsUnit3D2,
