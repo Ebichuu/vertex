@@ -6,7 +6,7 @@ import {
   Button, Form, Input, Message, Menu, Layout,
   Drawer, Table, Divider, Descriptions, Col, Row, Tag,
   Checkbox, Select, Dropdown, Switch, Upload, Modal,
-  Radio, Popover, Tree, Alert, notification as Notification,
+  Radio, Popover, Tree, Alert, DatePicker, notification as Notification,
   Space
 } from 'ant-design-vue';
 import App from './App';
@@ -56,7 +56,7 @@ const components = [
   Button, Form, Input, Menu, Layout, Drawer,
   Table, Divider, Descriptions, Col, Row, Tag,
   Checkbox, Select, Dropdown, Switch, Upload, Modal,
-  Radio, Popover, Tree, Alert, Space
+  Radio, Popover, Tree, Alert, DatePicker, Space
 ];
 
 for (const component of components) {

@@ -529,6 +529,15 @@ class TorrentMod {
     if (options.key) {
       where += ` and (name like '%${options.key}%' or record_note like '%${options.key}%')`;
     }
+    if (options.recordType && !isNaN(parseInt(options.recordType))) {
+      where += ` and record_type = ${parseInt(options.recordType)}`;
+    }
+    if (options.startTime && !isNaN(parseInt(options.startTime))) {
+      where += ` and record_time >= ${parseInt(options.startTime)}`;
+    }
+    if (options.endTime && !isNaN(parseInt(options.endTime))) {
+      where += ` and record_time <= ${parseInt(options.endTime)}`;
+    }
     const params = [options.length, index];
     const torrents = await util.getRecords('select id, rss_id as rssId, name, size, link, record_type as recordType, record_note as recordNote, upload, download, tracker, record_time as recordTime, add_time as addTime, delete_time as deleteTime, hash, client_id as clientId from torrents ' + where + ' order by id desc limit ? offset ?',
       params);

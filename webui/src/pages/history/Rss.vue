@@ -2,8 +2,40 @@
   <div style="font-size: 24px; font-weight: bold;">RSS 历史</div>
   <a-divider></a-divider>
   <div class="rss" >
+    <div class="filter-bar">
+      <a-select
+        v-model:value="qs.rss"
+        show-search
+        allow-clear
+        size="small"
+        style="width: 200px;"
+        placeholder="筛选 RSS 任务"
+        option-filter-prop="label"
+        :options="rssOptions"
+      ></a-select>
+      <a-input style="width: 180px;" size="small" placeholder="种子名称/记录关键词" v-model:value="qs.key"></a-input>
+      <a-select
+        v-model:value="qs.recordType"
+        allow-clear
+        size="small"
+        style="width: 140px;"
+        placeholder="种子状态"
+        :options="statusOptions"
+      ></a-select>
+      <a-range-picker
+        v-model:value="timeRange"
+        size="small"
+        style="width: 340px;"
+        :show-time="{ hideDisabledOptions: true }"
+        format="YYYY-MM-DD HH:mm"
+        :placeholder="['记录开始时间', '记录结束时间']"
+        :disabled-date="(current) => current && current > $moment().endOf('day')"
+      />
+      <a-button @click="resetFilter" size="small">重置</a-button>
+      <a-button @click="() => { qs.page = 1; listHistory(); }" type="primary" size="small">筛选</a-button>
+    </div>
     <a-table
-      :style="`font-size: ${isMobile() ? '12px': '14px'};`"
+      :style="`font-size: ${isMobile() ? '12px': '14px'}; margin-top: 12px;`"
       :columns="columns"
       size="small"
       :loading="loading"
@@ -15,13 +47,6 @@
       <template #title>
         <span style="font-size: 16px; font-weight: bold;">RSS 历史</span>
         <span style="font-size: 14px; font-weight: bold; color: red; margin-left: 12px;">遇到问题先去看 Wiki，特别是 Wiki 里的常见问题, 实在找不到再去交流群问, 别 TM Wiki 不看直接在群里问。</span>
-      </template>
-      <template #headerCell="{ column }">
-        <template v-if="column.dataIndex === 'name'">
-          种子名称
-          <a-input style="margin-left: 14px; width: 140px;" size="small" placeholder="筛选关键词" v-model:value="qs.key"></a-input>
-          <a-button @click="() => { qs.page = 1; listHistory(); }" style="margin-left: 4px;" size="small">筛选</a-button>
-        </template>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'rssId'">
@@ -62,7 +87,6 @@ export default {
         title: 'RSS',
         dataIndex: 'rssId',
         width: 18,
-        filterMultiple: false,
         fixed: true
       }, {
         title: '客户端',
@@ -106,8 +130,11 @@ export default {
       page: 1,
       length: 20,
       type: 'rss',
-      rss: '',
-      key: ''
+      rss: undefined,
+      key: '',
+      recordType: undefined,
+      startTime: '',
+      endTime: ''
     };
     const pagination = {
       position: ['topRight', 'bottomRight'],
@@ -121,7 +148,14 @@ export default {
       columns,
       qs,
       torrents: [],
-      rssList: []
+      rssList: [],
+      rssOptions: [],
+      statusOptions: [
+        { label: '已添加', value: 1 },
+        { label: '已拒绝', value: 2 },
+        { label: '添加失败', value: 3 }
+      ],
+      timeRange: null
     };
   },
   methods: {
@@ -132,10 +166,30 @@ export default {
         return false;
       }
     },
+    buildQuery () {
+      const params = {
+        page: this.qs.page,
+        length: this.qs.length,
+        type: this.qs.type,
+        rss: this.qs.rss || '',
+        key: this.qs.key || '',
+        recordType: this.qs.recordType || '',
+        startTime: '',
+        endTime: ''
+      };
+      if (this.timeRange && this.timeRange.length === 2 && this.timeRange[0] && this.timeRange[1]) {
+        // RangePicker 返回 dayjs 对象, 兼容其在无 .unix() 时退化为 moment/Date
+        const start = this.timeRange[0];
+        const end = this.timeRange[1];
+        params.startTime = typeof start.unix === 'function' ? start.unix() : this.$moment(start).unix();
+        params.endTime = typeof end.unix === 'function' ? end.unix() : this.$moment(end).unix();
+      }
+      return params;
+    },
     async listHistory () {
       this.loading = true;
       try {
-        const res = (await this.$api().torrent.listHistory(this.qs)).data;
+        const res = (await this.$api().torrent.listHistory(this.buildQuery())).data;
         this.torrents = res.torrents;
         this.pagination.total = res.total;
       } catch (e) {
@@ -147,7 +201,10 @@ export default {
       try {
         const res = await this.$api().rss.list();
         this.rssList = res.data;
-        this.columns[0].filters = [...this.rssList.map(item => ({ text: item.alias, value: item.id })), { text: '已删除', value: 'deleted' }];
+        this.rssOptions = [
+          ...this.rssList.map(item => ({ label: item.alias, value: item.id })),
+          { label: '已删除', value: 'deleted' }
+        ];
       } catch (e) {
         this.$message().error(e.message);
       }
@@ -160,13 +217,16 @@ export default {
       if (!clientId) return;
       window.open(`/proxy/client/${clientId}/`);
     },
-    async handleChange (pagination, filters) {
+    async handleChange (pagination) {
       this.qs.page = pagination.current;
-      if (filters.rssId) {
-        this.qs.rss = filters.rssId[0];
-      } else {
-        this.qs.rss = '';
-      }
+      this.listHistory();
+    },
+    resetFilter () {
+      this.qs.rss = undefined;
+      this.qs.key = '';
+      this.qs.recordType = undefined;
+      this.timeRange = null;
+      this.qs.page = 1;
       this.listHistory();
     },
     async delRecord (record) {
@@ -191,5 +251,12 @@ export default {
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
+}
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
 }
 </style>
