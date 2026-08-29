@@ -74,19 +74,6 @@
           <a-checkbox v-model:checked="rss.enable">启用</a-checkbox>
         </a-form-item>
         <a-form-item
-          label="下载器"
-          name="clientArr"
-          extra="选择下载器, 仅可选择已经启用的下载器"
-          :rules="[{ required: true, message: '${label}不可为空! ' }]">
-          <a-checkbox-group style="width: 100%;" v-model:value="rss.clientArr">
-            <a-row>
-              <a-col v-for="downloader of downloaders" :span="8" :key="downloader.id">
-                <a-checkbox :disabled="!downloader.enable && !rss.clientArr.includes(downloader.id)" v-model:value="downloader.id">{{ downloader.alias }}</a-checkbox>
-              </a-col>
-            </a-row>
-          </a-checkbox-group>
-        </a-form-item>
-        <a-form-item
           label="排序规则"
           name="clientSortBy"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
@@ -153,6 +140,7 @@
             新增
           </a-button>
         </a-form-item>
+        <a-divider orientation="left">共享 RSS 分流配置（可选）</a-divider>
         <a-form-item
           label="共享源标识"
           name="sharedSource"
@@ -164,6 +152,50 @@
           name="sharedSourcePriority"
           extra="填写共享源标识后生效。相同 RSS 链接的任务按数值从大到小匹配；同一个种子只会进入第一个规则匹配的任务">
           <a-input size="small" v-model:value="rss.sharedSourcePriority" type="number" step="1" style="width: 180px"/>
+        </a-form-item>
+        <a-alert
+          v-if="rss.sharedSource"
+          message="当前任务是共享 RSS 的一个分流分支"
+          description="接收规则决定本分支匹配哪些种子；规则留空可作为最低优先级的兜底分支。匹配后只会推送到本分支选择的目标下载器。"
+          type="info"
+          show-icon
+          style="margin-bottom: 16px"/>
+        <a-form-item
+          label="分流接收规则"
+          name="acceptRules"
+          extra="符合任意一个所选规则即接收；留空表示全部接收，适合作为优先级最低的兜底分支">
+          <a-checkbox-group style="width: 100%;" v-model:value="rss.acceptRules">
+            <a-row>
+              <a-col v-for="rssRule of rssRules" :span="8" :key="rssRule.id">
+                <a-checkbox v-model:value="rssRule.id">{{ rssRule.alias }}</a-checkbox>
+              </a-col>
+            </a-row>
+          </a-checkbox-group>
+        </a-form-item>
+        <a-form-item
+          label="分流拒绝规则"
+          name="rejectRules"
+          extra="符合任意一个所选规则即拒绝进入当前分支">
+          <a-checkbox-group style="width: 100%;" v-model:value="rss.rejectRules">
+            <a-row>
+              <a-col v-for="rssRule of rssRules" :span="8" :key="rssRule.id">
+                <a-checkbox v-model:value="rssRule.id">{{ rssRule.alias }}</a-checkbox>
+              </a-col>
+            </a-row>
+          </a-checkbox-group>
+        </a-form-item>
+        <a-form-item
+          label="分流目标下载器"
+          name="clientArr"
+          extra="种子匹配当前分支后推送到这里选择的下载器"
+          :rules="[{ required: true, message: '${label}不可为空! ' }]">
+          <a-checkbox-group style="width: 100%;" v-model:value="rss.clientArr">
+            <a-row>
+              <a-col v-for="downloader of downloaders" :span="8" :key="downloader.id">
+                <a-checkbox :disabled="!downloader.enable && !rss.clientArr.includes(downloader.id)" v-model:value="downloader.id">{{ downloader.alias }}</a-checkbox>
+              </a-col>
+            </a-row>
+          </a-checkbox-group>
         </a-form-item>
         <a-form-item
           label="下载链接域名替换"
@@ -356,30 +388,6 @@
           name="replaceStr"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
           <a-input size="small" v-model:value="rss.replaceStr"/>
-        </a-form-item>
-        <a-form-item
-          label="拒绝规则"
-          name="rejectRules"
-          extra="拒绝规则, 种子状态符合其中一个时即触发拒绝种子操作">
-          <a-checkbox-group style="width: 100%;" v-model:value="rss.rejectRules">
-            <a-row>
-              <a-col v-for="rssRule of rssRules" :span="8" :key="rssRule.id">
-                <a-checkbox  v-model:value="rssRule.id">{{ rssRule.alias }}</a-checkbox>
-              </a-col>
-            </a-row>
-          </a-checkbox-group>
-        </a-form-item>
-        <a-form-item
-          label="选择规则"
-          name="acceptRules"
-          extra="选择规则, 种子状态符合其中一个时即触发添加种子操作">
-          <a-checkbox-group style="width: 100%;" v-model:value="rss.acceptRules">
-            <a-row>
-              <a-col v-for="rssRule of rssRules" :span="8" :key="rssRule.id">
-                <a-checkbox  v-model:value="rssRule.id">{{ rssRule.alias }}</a-checkbox>
-              </a-col>
-            </a-row>
-          </a-checkbox-group>
         </a-form-item>
         <a-form-item
           :wrapperCol="isMobile() ? { span:24 } : { span: 21, offset: 3 }">
