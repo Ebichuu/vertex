@@ -28,6 +28,21 @@ class RssSourceManager {
     return new Set(Array.from(source.streams.values()).flatMap(stream => Array.from(stream.consumers.keys()))).size;
   }
 
+  _getConsumers (source) {
+    const consumers = new Map();
+    for (const stream of source.streams.values()) {
+      for (const consumer of stream.consumers.values()) {
+        consumers.set(consumer.id, consumer);
+      }
+    }
+    return Array.from(consumers.values()).sort((a, b) => {
+      if (b.sharedSourcePriority !== a.sharedSourcePriority) {
+        return b.sharedSourcePriority - a.sharedSourcePriority;
+      }
+      return a.id.localeCompare(b.id);
+    });
+  }
+
   register (task) {
     const sourceId = task.sharedSource;
     const scheduleConfig = this._getScheduleConfig(task);
@@ -161,13 +176,7 @@ class RssSourceManager {
     return uniqueTorrents;
   }
 
-  _route (stream, torrents) {
-    const consumers = Array.from(stream.consumers.values()).sort((a, b) => {
-      if (b.sharedSourcePriority !== a.sharedSourcePriority) {
-        return b.sharedSourcePriority - a.sharedSourcePriority;
-      }
-      return a.id.localeCompare(b.id);
-    });
+  _routeConsumers (consumers, torrents) {
     const batches = new Map(consumers.map(consumer => [consumer.id, []]));
     let unmatched = 0;
 
@@ -181,6 +190,16 @@ class RssSourceManager {
     }
 
     return { consumers, batches, unmatched };
+  }
+
+  _route (stream, torrents) {
+    const consumers = Array.from(stream.consumers.values()).sort((a, b) => {
+      if (b.sharedSourcePriority !== a.sharedSourcePriority) {
+        return b.sharedSourcePriority - a.sharedSourcePriority;
+      }
+      return a.id.localeCompare(b.id);
+    });
+    return this._routeConsumers(consumers, torrents);
   }
 
   async _dispatch (source, stream, torrents) {
@@ -202,6 +221,28 @@ class RssSourceManager {
     if (unmatched > 0) {
       logger.info('共享 RSS 源', source.id, `${unmatched} 个种子未匹配当前链接的任何分流任务`);
     }
+  }
+
+  async dispatchExternal (sourceId, torrents, sourceLabel = '外部来源') {
+    const source = this.sources.get(sourceId);
+    if (!source) throw new Error(`共享 RSS 源 ${sourceId} 不存在或未启用`);
+    const consumers = this._getConsumers(source);
+    if (consumers.length === 0) throw new Error(`共享 RSS 源 ${sourceId} 没有可用分流任务`);
+    const { batches, unmatched } = this._routeConsumers(consumers, torrents);
+    const results = await Promise.allSettled(consumers.map(async consumer => {
+      const batch = batches.get(consumer.id).map(torrent => ({ ...torrent }));
+      await consumer.scheduleRssFetch(batch);
+      return { alias: consumer.alias, count: batch.length };
+    }));
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index];
+      if (result.status === 'fulfilled') {
+        logger.info(sourceLabel, sourceId, `分流至 ${result.value.alias}: ${result.value.count} 个种子`);
+      } else {
+        logger.error(sourceLabel, sourceId, `分流至 ${consumers[index].alias} 失败`, result.reason);
+      }
+    }
+    if (unmatched > 0) logger.info(sourceLabel, sourceId, `${unmatched} 个种子未匹配任何分流任务`);
   }
 
   async _run (source) {

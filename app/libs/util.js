@@ -97,6 +97,27 @@ const runMigrations = function () {
       db.exec('ALTER TABLE torrents ADD COLUMN client_id TEXT');
       logger.info('torrents 表新增 client_id 字段');
     }
+    if (torrentColumns.indexOf('source_key') === -1) {
+      db.exec('ALTER TABLE torrents ADD COLUMN source_key TEXT');
+      logger.info('torrents 表新增 source_key 字段');
+    }
+    if (torrentColumns.indexOf('source_type') === -1) {
+      db.exec('ALTER TABLE torrents ADD COLUMN source_type TEXT');
+      logger.info('torrents 表新增 source_type 字段');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_torrents_source_key_type ON torrents (source_key, record_type)');
+    const sourceKeyRows = db.prepare('SELECT id, link FROM torrents WHERE (source_key IS NULL OR source_key = \'\') AND link IS NOT NULL').all();
+    const updateSourceKey = db.prepare('UPDATE torrents SET source_key = ?, source_type = COALESCE(NULLIF(source_type, \'\'), \'rss\') WHERE id = ?');
+    const backfillSourceKeys = db.transaction((rows) => {
+      for (const row of rows) {
+        const match = String(row.link || '').match(/^https?:\/\/([^/]+)[\s\S]*?[?&]id=(\d+)/i);
+        if (!match) continue;
+        const host = match[1].toLowerCase().replace(/^www\./, '');
+        updateSourceKey.run(`${host}:${match[2]}`, row.id);
+      }
+    });
+    backfillSourceKeys(sourceKeyRows);
+    db.exec('UPDATE torrents SET source_type = \'rss\' WHERE source_type IS NULL OR source_type = \'\'');
     
     // 追加索引 - 覆盖查询以优化 sum(upload)/sum(download) 等聚合
     db.exec(`
@@ -469,6 +490,16 @@ exports.listRss = function () {
     }
   }
   return rssList;
+};
+
+exports.listWebMonitor = function () {
+  const directory = path.join(__dirname, '../data/webMonitor');
+  if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true });
+  const list = [];
+  for (const file of fs.readdirSync(directory)) {
+    if (path.extname(file) === '.json') list.push(_importJson(path.join(directory, file)));
+  }
+  return list;
 };
 
 exports.listDeleteRule = function () {

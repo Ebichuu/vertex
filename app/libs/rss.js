@@ -7,6 +7,7 @@ const bencode = require('bencode');
 const util = require('./util');
 const redis = require('./redis');
 const logger = require('./logger');
+const torrentIdentity = require('./torrentIdentity');
 
 const parseXml = util.promisify(parser);
 
@@ -20,6 +21,8 @@ const normalizeTorrentUrl = function (torrentUrl) {
 };
 
 exports.normalizeTorrentUrl = normalizeTorrentUrl;
+
+exports.getTorrentSourceKey = torrentIdentity.getTorrentSourceKey;
 
 const parseSizeText = function (sizeText) {
   const match = (sizeText || '').replace(/\u00a0/g, ' ').match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/i);
@@ -916,7 +919,11 @@ exports.getTorrents = async function (rssUrl, options = {}) {
     } else {
       torrents = await _getTorrents(rssUrl);
     }
-    torrents.forEach(torrent => { torrent.url = normalizeTorrentUrl(torrent.url); });
+    torrents.forEach(torrent => {
+      torrent.url = normalizeTorrentUrl(torrent.url);
+      torrent.sourceKey = torrent.sourceKey || torrentIdentity.getTorrentSourceKey(torrent, rssUrl);
+      torrent.sourceType = torrent.sourceType || 'rss';
+    });
     return torrents;
   } catch (e) {
     logger.error(host, '获取 Rss 报错', e);

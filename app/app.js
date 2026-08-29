@@ -18,6 +18,7 @@ const Douban = require('./common/Douban');
 const Site = require('./common/Site');
 const Watch = require('./common/Watch');
 const IRC = require('./common/IRC');
+const WebMonitor = require('./common/WebMonitor');
 
 const sites = require('./libs/site');
 const logger = require('./libs/logger');
@@ -259,6 +260,7 @@ const init = function () {
   global.runningScript = {};
   global.runningWatch = {};
   global.runningIRC = {};
+  global.runningWebMonitor = {};
   global.startTime = moment().unix();
   initPush();
   for (const client of util.listClient()) {
@@ -269,6 +271,11 @@ const init = function () {
   for (const rss of util.listRss()) {
     if (rss.enable) {
       global.runningRss[rss.id] = new Rss(rss);
+    }
+  }
+  for (const monitor of util.listWebMonitor()) {
+    if (monitor.enable) {
+      global.runningWebMonitor[monitor.id] = new WebMonitor(monitor);
     }
   }
   for (const server of util.listServer()) {
@@ -385,6 +392,11 @@ function setupGracefulShutdown() {
         }
       }
       logger.info('所有 RSS 实例已停止');
+
+      for (const monitor of Object.values(global.runningWebMonitor || {})) {
+        if (monitor.destroy) monitor.destroy();
+      }
+      logger.info('所有网页监控实例已停止');
 
       for (const server of Object.values(global.runningServer || {})) {
         if (server.destroy) {

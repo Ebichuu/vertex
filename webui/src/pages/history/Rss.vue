@@ -56,6 +56,11 @@
           <a v-if="record.clientId" @click="gotoClient(record.clientId)">{{ record.clientId }}</a>
           <span v-else>-</span>
         </template>
+        <template v-if="column.dataIndex === 'sourceType'">
+          <a-tag :color="record.sourceType === 'web' ? 'processing' : 'default'">
+            {{ record.sourceType === 'web' ? '网页监控' : 'RSS' }}
+          </a-tag>
+        </template>
         <template v-if="['size', 'upload', 'download'].indexOf(column.dataIndex) !== -1">
           {{ $formatSize(record[column.dataIndex]) }}
         </template>
@@ -88,6 +93,10 @@ export default {
         dataIndex: 'rssId',
         width: 18,
         fixed: true
+      }, {
+        title: '来源',
+        dataIndex: 'sourceType',
+        width: 20
       }, {
         title: '客户端',
         dataIndex: 'clientId',

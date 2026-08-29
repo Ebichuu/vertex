@@ -21,6 +21,7 @@ import RuleRss from '@/pages/rule/Rss';
 import RuleSelect from '@/pages/rule/Select';
 
 import TaskRss from '@/pages/task/Rss';
+import TaskWebMonitor from '@/pages/task/WebMonitor';
 import TaskSubscribe from '@/pages/task/Subscribe';
 import TaskLink from '@/pages/task/Link';
 import TaskBulkLink from '@/pages/task/BulkLink';
@@ -283,6 +284,12 @@ const task = {
       component: TaskRss,
       meta: {
         title: 'Rss 任务 - 任务配置'
+      }
+    }, {
+      path: 'webMonitor',
+      component: TaskWebMonitor,
+      meta: {
+        title: '网页监控 - 任务配置'
       }
     }, {
       path: 'subscribe',

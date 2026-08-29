@@ -15,6 +15,10 @@ if [ ! -d '/vertex/data' ]; then
   mkdir /vertex/data/push
 fi
 
+if [ ! -d '/vertex/data/webMonitor' ]; then
+  mkdir /vertex/data/webMonitor -p
+fi
+
 if [ ! -d '/vertex/data/rule/race' ]; then
   mkdir /vertex/data/rule/race
 fi

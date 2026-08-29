@@ -14,6 +14,7 @@ import watch from './watch';
 import subscribe from './subscribe';
 import torrent from './torrent';
 import log from './log';
+import webMonitor from './webMonitor';
 
 const api = {
   user,
@@ -31,7 +32,8 @@ const api = {
   subscribe,
   torrent,
   log,
-  watch
+  watch,
+  webMonitor
 };
 
 export default () => { return api; };

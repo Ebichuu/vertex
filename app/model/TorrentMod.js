@@ -539,7 +539,7 @@ class TorrentMod {
       where += ` and record_time <= ${parseInt(options.endTime)}`;
     }
     const params = [options.length, index];
-    const torrents = await util.getRecords('select id, rss_id as rssId, name, size, link, record_type as recordType, record_note as recordNote, upload, download, tracker, record_time as recordTime, add_time as addTime, delete_time as deleteTime, hash, client_id as clientId from torrents ' + where + ' order by id desc limit ? offset ?',
+    const torrents = await util.getRecords('select id, rss_id as rssId, name, size, link, record_type as recordType, record_note as recordNote, upload, download, tracker, record_time as recordTime, add_time as addTime, delete_time as deleteTime, hash, client_id as clientId, source_type as sourceType from torrents ' + where + ' order by id desc limit ? offset ?',
       params);
     const total = (await util.getRecord('select count(*) as total from torrents ' + where)).total;
     return { torrents, total };

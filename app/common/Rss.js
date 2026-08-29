@@ -212,9 +212,11 @@ class Rss {
       torrent.link,
       nowTime,
       2,
-      reason
+      reason,
+      torrent.sourceKey || null,
+      torrent.sourceType || 'rss'
     ]);
-    await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)', rows);
+    await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note, source_key, source_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows);
     for (const torrent of torrents) {
       await this.ntf.rejectTorrent(this._rss, undefined, torrent, reason);
     }
@@ -240,7 +242,7 @@ class Rss {
     return a + b;
   };
 
-  async _downloadTorrent(url, _hash) {
+  async _downloadTorrent(url, _hash, cookie) {
     if (_hash && fs.existsSync(path.join(__dirname, '../../torrents', _hash + '.torrent'))) {
       return { hash: _hash, filepath: path.join(__dirname, '../../torrents', _hash + '.torrent') };
     }
@@ -249,7 +251,7 @@ class Rss {
       method: 'GET',
       encoding: null,
       headers: {
-        cookie: this.cookie
+        cookie: cookie || this.cookie
       }
     });
     const buffer = Buffer.from(res.body, 'utf-8');
@@ -485,7 +487,9 @@ class Rss {
         nowTime,
         recordType,
         reason,
-        clientId || null
+        clientId || null,
+        target.sourceKey || null,
+        target.sourceType || 'rss'
       ]);
     };
     const pushNoteCategoryRow = (target, reason, recordType = 2, categoryValue, clientId) => {
@@ -501,7 +505,9 @@ class Rss {
         nowTime,
         recordType,
         reason,
-        clientId || null
+        clientId || null,
+        target.sourceKey || null,
+        target.sourceType || 'rss'
       ]);
     };
     const pushAddRow = (hashValue, target, categoryValue, note = '添加种子', clientId) => {
@@ -518,7 +524,9 @@ class Rss {
         nowTime,
         1,
         note,
-        clientId || null
+        clientId || null,
+        target.sourceKey || null,
+        target.sourceType || 'rss'
       ]);
     };
 
@@ -681,12 +689,13 @@ class Rss {
       try {
         let truehash = '';
         this.addCount += 1;
-        if (this.pushTorrentFile) {
+        if (this.pushTorrentFile || torrent.downloadCookie) {
           let filepath;
           let hash;
           try {
-            ({ filepath, hash } = await this._downloadTorrent(torrent.url, torrent.hash));
+            ({ filepath, hash } = await this._downloadTorrent(torrent.url, torrent.hash, torrent.downloadCookie));
           } catch (downloadError) {
+            if (torrent.downloadCookie) throw downloadError;
             logger.error(this.alias, '下载种子文件失败，尝试使用链接推送:', downloadError.message);
             await client.addTorrent(this._normalizeTorrentUrl(torrent.url), torrent.hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
           }
@@ -800,6 +809,21 @@ class Rss {
     // 过滤掉已处理和被冻结的种子和超过每小时推送上限的种子
     let newTorrents = [];
 
+    const handledSourceKeys = new Set();
+    const sourceKeyList = Array.from(new Set(torrents.map(item => item.sourceKey).filter(Boolean)));
+    if (sourceKeyList.length > 0) {
+      const batchSize = 300;
+      for (let i = 0; i < sourceKeyList.length; i += batchSize) {
+        const batch = sourceKeyList.slice(i, i + batchSize);
+        const placeholders = batch.map(() => '?').join(',');
+        const rows = await util.getRecords(
+          `SELECT source_key as sourceKey FROM torrents WHERE record_type IN (1, 2) AND source_key IN (${placeholders})`,
+          batch
+        );
+        for (const row of rows) handledSourceKeys.add(row.sourceKey);
+      }
+    }
+
     const existingHashes = new Set();
     const hashList = Array.from(new Set(torrents.map(item => item.hash).filter(Boolean)));
     if (hashList.length > 0) {
@@ -808,7 +832,7 @@ class Rss {
         const batch = hashList.slice(i, i + batchSize);
         const placeholders = batch.map(() => '?').join(',');
         const rows = await util.getRecords(
-          `SELECT hash FROM torrents WHERE rss_id = ? AND hash IN (${placeholders})`,
+          `SELECT hash FROM torrents WHERE rss_id = ? AND record_type IN (1, 2) AND hash IN (${placeholders})`,
           [this.id, ...batch]
         );
         for (const row of rows) {
@@ -820,6 +844,7 @@ class Rss {
     // 过滤种子
     const rejectedRuleRows = [];
     for (const torrent of torrents) {
+      if (torrent.sourceKey && handledSourceKeys.has(torrent.sourceKey)) continue;
       // 检查是否在数据库中已存在
       if (torrent.hash && existingHashes.has(torrent.hash)) continue;
       // 检查是否被冻结
@@ -837,7 +862,9 @@ class Rss {
             torrent.link,
             moment().unix(),
             2,
-            `拒绝规则: ${rejectRule.alias}`
+            `拒绝规则: ${rejectRule.alias}`,
+            torrent.sourceKey || null,
+            torrent.sourceType || 'rss'
           ]);
           await this.ntf.rejectTorrent(this._rss, undefined, torrent, `拒绝规则: ${rejectRule.alias}`);
           reject = true;
@@ -849,7 +876,7 @@ class Rss {
       newTorrents.push(torrent);
     }
     if (rejectedRuleRows.length > 0) {
-      await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note) values (?, ?, ?, ?, ?, ?, ?, ?)', rejectedRuleRows);
+      await util.runRecords('INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note, source_key, source_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rejectedRuleRows);
     }
 
     logger.debug(this.alias, `种子过滤完成，耗时: ${moment().diff(startTime, 'seconds')}秒，有效数量: ${newTorrents.length}`);
@@ -1450,9 +1477,9 @@ class Rss {
     // 处理每个下载器的种子分配（并行处理）
     const allProcessingTasks = [];
     const maxConcurrent = 15; // 每个客户端的最大并发处理数量
-    const insertNoteSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-    const insertNoteWithCategorySql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-    const insertAddSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note, client_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const insertNoteSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, record_time, record_type, record_note, client_id, source_key, source_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const insertNoteWithCategorySql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, record_type, record_note, client_id, source_key, source_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const insertAddSql = 'INSERT INTO torrents (hash, name, size, rss_id, link, category, record_time, add_time, record_type, record_note, client_id, source_key, source_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
     for (const clientId in clientAssignments) {
       const client = global.runningClient[clientId];
