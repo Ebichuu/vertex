@@ -160,10 +160,9 @@
           <a-input size="small" v-model:value="rss.sharedSource" placeholder="例如 CHD-MAIN"/>
         </a-form-item>
         <a-form-item
-          v-if="rss.sharedSource"
           label="分流优先级"
           name="sharedSourcePriority"
-          extra="仅用于相同 RSS 链接的任务。数值越大越先匹配；同一个种子只会进入第一个规则匹配的任务">
+          extra="填写共享源标识后生效。相同 RSS 链接的任务按数值从大到小匹配；同一个种子只会进入第一个规则匹配的任务">
           <a-input size="small" v-model:value="rss.sharedSourcePriority" type="number" step="1" style="width: 180px"/>
         </a-form-item>
         <a-form-item
