@@ -760,7 +760,7 @@ class Rss {
       torrents = this._normalizeTorrentUrls(_torrents);
     } else {
       // 从多个URL获取种子并合并，单个源失败不中断整体
-      const results = await Promise.allSettled(this.urls.map(url => rss.getTorrents(url)));
+      const results = await Promise.allSettled(this.urls.map(url => rss.getTorrents(url, { throwOnError: true })));
       const failedUrls = [];
       let successCount = 0;
       for (let i = 0; i < results.length; i++) {
@@ -1509,7 +1509,7 @@ class Rss {
   }
 
   async dryrun() {
-    const torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url)))).flat();
+    const torrents = (await Promise.all(this.urls.map(url => rss.getTorrents(url, { throwOnError: true })))).flat();
     for (const torrent of torrents) {
       let reject = false;
       for (const rejectRule of this.rejectRules) {

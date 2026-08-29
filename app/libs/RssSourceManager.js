@@ -9,12 +9,11 @@ class RssSourceManager {
   }
 
   _normalizeUrls (urls) {
-    return (urls || []).map(url => (url || '').trim()).filter(Boolean).sort();
+    return [...new Set((urls || []).map(url => (url || '').trim()).filter(Boolean))].sort();
   }
 
-  _getSourceConfig (task) {
+  _getScheduleConfig (task) {
     return {
-      urls: this._normalizeUrls(task.urls),
       scheduleType: task.scheduleType,
       cron: task.scheduleType === 'cron' ? task._rss.cron : '',
       intervalSeconds: task.scheduleType === 'interval' ? task.intervalSeconds : 0
@@ -25,23 +24,30 @@ class RssSourceManager {
     return JSON.stringify(config);
   }
 
+  _countConsumers (source) {
+    return new Set(Array.from(source.streams.values()).flatMap(stream => Array.from(stream.consumers.keys()))).size;
+  }
+
   register (task) {
     const sourceId = task.sharedSource;
-    const config = this._getSourceConfig(task);
-    const signature = this._getSignature(config);
+    const scheduleConfig = this._getScheduleConfig(task);
+    const signature = this._getSignature(scheduleConfig);
     let source = this.sources.get(sourceId);
     let created = false;
 
     if (source && source.signature !== signature) {
-      throw new Error(`共享 RSS 源 ${sourceId} 的链接或调度配置不一致`);
+      throw new Error(`共享 RSS 源 ${sourceId} 的调度配置不一致`);
     }
 
     if (!source) {
       source = {
         id: sourceId,
-        ...config,
+        ...scheduleConfig,
         signature,
-        consumers: new Map(),
+        streams: new Map(),
+        streamOrder: [],
+        nextStreamIndex: 0,
+        taskUrls: new Map(),
         inFlight: false,
         cronJob: null,
         intervalTimer: null,
@@ -51,20 +57,42 @@ class RssSourceManager {
       created = true;
     }
 
-    source.consumers.set(task.id, task);
+    const urls = this._normalizeUrls(task.urls);
+    source.taskUrls.set(task.id, urls);
+    for (const url of urls) {
+      let stream = source.streams.get(url);
+      if (!stream) {
+        stream = { url, consumers: new Map() };
+        source.streams.set(url, stream);
+        source.streamOrder.push(url);
+      }
+      stream.consumers.set(task.id, task);
+    }
+
     if (created) {
       this._start(source);
     }
-    logger.info('共享 RSS 源', sourceId, `已注册分流任务 ${task.alias}，当前 ${source.consumers.size} 个任务`);
+    logger.info('共享 RSS 源', sourceId, `已注册任务 ${task.alias}，当前 ${source.streams.size} 个唯一链接、${this._countConsumers(source)} 个任务`);
   }
 
   unregister (task) {
     const source = this.sources.get(task.sharedSource);
     if (!source) return;
 
-    source.consumers.delete(task.id);
-    if (source.consumers.size !== 0) {
-      logger.info('共享 RSS 源', source.id, `已移除分流任务 ${task.alias}，剩余 ${source.consumers.size} 个任务`);
+    const urls = source.taskUrls.get(task.id) || [];
+    source.taskUrls.delete(task.id);
+    for (const url of urls) {
+      const stream = source.streams.get(url);
+      if (!stream) continue;
+      stream.consumers.delete(task.id);
+      if (stream.consumers.size !== 0) continue;
+      source.streams.delete(url);
+      source.streamOrder = source.streamOrder.filter(item => item !== url);
+    }
+
+    if (source.streams.size !== 0) {
+      source.nextStreamIndex %= source.streamOrder.length;
+      logger.info('共享 RSS 源', source.id, `已移除任务 ${task.alias}，剩余 ${source.streams.size} 个唯一链接、${this._countConsumers(source)} 个任务`);
       return;
     }
 
@@ -77,12 +105,12 @@ class RssSourceManager {
     source.stopped = false;
     if (source.scheduleType === 'interval') {
       this._scheduleInterval(source, source.intervalSeconds * 1000);
-      logger.info('共享 RSS 源', source.id, `已按 ${source.intervalSeconds} 秒间隔启动`);
+      logger.info('共享 RSS 源', source.id, `已按 ${source.intervalSeconds} 秒全局请求间隔启动`);
       return;
     }
 
     source.cronJob = cron.schedule(source.cron, () => this._run(source));
-    logger.info('共享 RSS 源', source.id, `已按 Cron ${source.cron} 启动`);
+    logger.info('共享 RSS 源', source.id, `已按 Cron ${source.cron} 启动，每轮只抓取一个链接`);
   }
 
   _stop (source) {
@@ -111,25 +139,16 @@ class RssSourceManager {
     }, delay);
   }
 
-  async _fetch (source) {
-    const results = await Promise.allSettled(source.urls.map(url => rss.getTorrents(url)));
-    const torrents = [];
-    let successCount = 0;
+  _nextStream (source) {
+    if (source.streamOrder.length === 0) return null;
+    source.nextStreamIndex %= source.streamOrder.length;
+    const url = source.streamOrder[source.nextStreamIndex];
+    source.nextStreamIndex = (source.nextStreamIndex + 1) % source.streamOrder.length;
+    return source.streams.get(url) || null;
+  }
 
-    for (let index = 0; index < results.length; index++) {
-      const result = results[index];
-      if (result.status === 'fulfilled') {
-        successCount += 1;
-        torrents.push(...result.value);
-      } else {
-        logger.error('共享 RSS 源', source.id, `第 ${index + 1} 个链接抓取失败`, result.reason);
-      }
-    }
-
-    if (successCount === 0) {
-      throw new Error(`共享 RSS 源 ${source.id} 的所有链接均抓取失败`);
-    }
-
+  async _fetch (source, stream) {
+    const torrents = await rss.getTorrents(stream.url, { throwOnError: true });
     const uniqueTorrents = [];
     const torrentKeys = new Set();
     for (const torrent of torrents) {
@@ -138,11 +157,12 @@ class RssSourceManager {
       torrentKeys.add(key);
       uniqueTorrents.push(torrent);
     }
+    logger.info('共享 RSS 源', source.id, `链接抓取完成，共 ${uniqueTorrents.length} 个种子`);
     return uniqueTorrents;
   }
 
-  _route (source, torrents) {
-    const consumers = Array.from(source.consumers.values()).sort((a, b) => {
+  _route (stream, torrents) {
+    const consumers = Array.from(stream.consumers.values()).sort((a, b) => {
       if (b.sharedSourcePriority !== a.sharedSourcePriority) {
         return b.sharedSourcePriority - a.sharedSourcePriority;
       }
@@ -163,8 +183,8 @@ class RssSourceManager {
     return { consumers, batches, unmatched };
   }
 
-  async _dispatch (source, torrents) {
-    const { consumers, batches, unmatched } = this._route(source, torrents);
+  async _dispatch (source, stream, torrents) {
+    const { consumers, batches, unmatched } = this._route(stream, torrents);
     const results = await Promise.allSettled(consumers.map(async consumer => {
       const batch = batches.get(consumer.id).map(torrent => ({ ...torrent }));
       await consumer.scheduleRssFetch(batch);
@@ -180,7 +200,7 @@ class RssSourceManager {
       }
     }
     if (unmatched > 0) {
-      logger.info('共享 RSS 源', source.id, `${unmatched} 个种子未匹配任何分流任务`);
+      logger.info('共享 RSS 源', source.id, `${unmatched} 个种子未匹配当前链接的任何分流任务`);
     }
   }
 
@@ -191,14 +211,16 @@ class RssSourceManager {
       return;
     }
 
+    const stream = this._nextStream(source);
+    if (!stream) return;
     source.inFlight = true;
     const startedAt = Date.now();
     try {
-      const torrents = await this._fetch(source);
-      await this._dispatch(source, torrents);
-      logger.info('共享 RSS 源', source.id, `抓取并分流完成，共 ${torrents.length} 个种子，耗时 ${Date.now() - startedAt}ms`);
+      const torrents = await this._fetch(source, stream);
+      await this._dispatch(source, stream, torrents);
+      logger.info('共享 RSS 源', source.id, `本轮抓取并分流完成，耗时 ${Date.now() - startedAt}ms`);
     } catch (error) {
-      logger.error('共享 RSS 源', source.id, '抓取或分流失败', error);
+      logger.error('共享 RSS 源', source.id, '本轮抓取或分流失败', error);
     } finally {
       source.inFlight = false;
     }

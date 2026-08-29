@@ -905,7 +905,7 @@ const _getTorrentsWrapper = {
   'cinematik.net': _getTorrentsCinematik
 };
 
-exports.getTorrents = async function (rssUrl) {
+exports.getTorrents = async function (rssUrl, options = {}) {
   const host = new URL(rssUrl).host;
   try {
     let torrents;
@@ -920,6 +920,7 @@ exports.getTorrents = async function (rssUrl) {
     return torrents;
   } catch (e) {
     logger.error(host, '获取 Rss 报错', e);
+    if (options.throwOnError) throw e;
     return [];
   }
 };

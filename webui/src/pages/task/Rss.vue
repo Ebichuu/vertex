@@ -156,14 +156,14 @@
         <a-form-item
           label="共享源标识"
           name="sharedSource"
-          extra="可选。多个任务填写相同标识、相同 RSS 链接和相同调度配置时，只抓取一次，并按任务优先级互斥分流">
+          extra="可选。相同标识的任务共用一个请求队列：不同链接按调度间隔轮流抓取，相同链接只抓取一次并互斥分流；组内调度配置必须一致">
           <a-input size="small" v-model:value="rss.sharedSource" placeholder="例如 CHD-MAIN"/>
         </a-form-item>
         <a-form-item
           v-if="rss.sharedSource"
           label="分流优先级"
           name="sharedSourcePriority"
-          extra="数值越大越先匹配；同一个种子只会进入第一个规则匹配的任务">
+          extra="仅用于相同 RSS 链接的任务。数值越大越先匹配；同一个种子只会进入第一个规则匹配的任务">
           <a-input size="small" v-model:value="rss.sharedSourcePriority" type="number" step="1" style="width: 180px"/>
         </a-form-item>
         <a-form-item
@@ -211,7 +211,7 @@
         <a-form-item
           label="调度方式"
           name="scheduleType"
-          extra="秒级间隔按两次调度开始时间计算，上一轮未完成时不会并发执行"
+          extra="秒级间隔按两次请求开始时间计算，上一轮未完成时不会并发；共享源组每轮只请求一个唯一链接"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
           <a-select size="small" v-model:value="rss.scheduleType" style="width: 180px">
             <a-select-option value="cron">Cron 表达式</a-select-option>
@@ -514,7 +514,7 @@ export default {
         skipSameTorrent: true,
         pushTorrentFile: true,
         scheduleType: 'cron',
-        intervalSeconds: 60,
+        intervalSeconds: 62,
         cron: '* * * * *',
         sharedSource: '',
         sharedSourcePriority: 0,

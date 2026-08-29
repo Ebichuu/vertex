@@ -16,9 +16,8 @@ class RssMod {
     return rssSet;
   }
 
-  _getSharedSourceSignature (rssSet) {
+  _getSharedSourceScheduleSignature (rssSet) {
     return JSON.stringify({
-      urls: [...rssSet.rssUrls].sort(),
       scheduleType: rssSet.scheduleType,
       cron: rssSet.scheduleType === 'cron' ? rssSet.cron : '',
       intervalSeconds: rssSet.scheduleType === 'interval' ? rssSet.intervalSeconds : 0
@@ -38,13 +37,13 @@ class RssMod {
     }
 
     if (!rssSet.enable || !rssSet.sharedSource) return;
-    const signature = this._getSharedSourceSignature(rssSet);
+    const signature = this._getSharedSourceScheduleSignature(rssSet);
     const conflict = util.listRss().find(item => {
       if (!item.enable || item.id === rssSet.id || (item.sharedSource || '').trim() !== rssSet.sharedSource) return false;
-      return this._getSharedSourceSignature(this._normalizeRssSet(item)) !== signature;
+      return this._getSharedSourceScheduleSignature(this._normalizeRssSet(item)) !== signature;
     });
     if (conflict) {
-      throw new Error(`共享 RSS 源 ${rssSet.sharedSource} 与任务 ${conflict.alias} 的链接或调度配置不一致`);
+      throw new Error(`共享 RSS 源 ${rssSet.sharedSource} 与任务 ${conflict.alias} 的调度配置不一致`);
     }
   }
 
