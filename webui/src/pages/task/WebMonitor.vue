@@ -51,8 +51,11 @@
       <a-form-item label="站点解析器" name="parserType" :rules="[{ required: true }]">
         <a-select v-model:value="monitor.parserType" style="width: 220px"><a-select-option value="chd">CHD</a-select-option></a-select>
       </a-form-item>
-      <a-form-item label="种子页面" name="pageUrl" extra="监控 CHD 最新种子列表页面" :rules="[{ required: true, message: '页面地址不可为空' }]">
+      <a-form-item label="种子页面" name="pageUrl" extra="自动按发布时间读取最新列表" :rules="[{ required: true, message: '页面地址不可为空' }]">
         <a-input v-model:value="monitor.pageUrl"/>
+      </a-form-item>
+      <a-form-item label="监控页数" name="pageCount" extra="CHD 第一页有大量置顶官种，默认读取前两页以覆盖普通种">
+        <a-input type="number" min="1" max="5" v-model:value="monitor.pageCount" style="width: 220px"><template #addonAfter>页</template></a-input>
       </a-form-item>
       <a-form-item label="登录 Cookie" name="cookie" extra="仅用于读取种子页面和下载种子文件，不会交给下载器" :rules="[{ required: true, message: 'Cookie 不可为空' }]">
         <a-input-password v-model:value="monitor.cookie"/>
@@ -65,6 +68,9 @@
           <a-input type="number" min="1" max="86400" v-model:value="monitor.minIntervalSeconds" style="width: 150px"><template #addonAfter>最短秒数</template></a-input>
           <a-input type="number" min="1" max="86400" v-model:value="monitor.maxIntervalSeconds" style="width: 150px"><template #addonAfter>最长秒数</template></a-input>
         </a-input-group>
+      </a-form-item>
+      <a-form-item label="最长休眠时间" name="maxSleepTime" extra="监控中断超过此时间时只重建基线；首次发现时已超过此发布时间的种子也会忽略，建议不低于 600 秒">
+        <a-input type="number" min="1" max="86400" v-model:value="monitor.maxSleepTime" style="width: 220px"><template #addonAfter>秒</template></a-input>
       </a-form-item>
       <a-form-item :wrapperCol="{ span: 20, offset: 4 }">
         <a-button type="primary" html-type="submit">应用 | 完成</a-button>
@@ -94,10 +100,12 @@ export default {
         enable: false,
         parserType: 'chd',
         pageUrl: 'https://ptchdbits.co/torrents.php',
+        pageCount: 2,
         cookie: '',
         targetSharedSource: 'CHD',
         minIntervalSeconds: 11,
-        maxIntervalSeconds: 61
+        maxIntervalSeconds: 61,
+        maxSleepTime: 600
       }
     };
   },
@@ -112,11 +120,19 @@ export default {
     async modifyMonitor () {
       const min = Number(this.monitor.minIntervalSeconds);
       const max = Number(this.monitor.maxIntervalSeconds);
+      const pageCount = Number(this.monitor.pageCount);
+      const maxSleepTime = Number(this.monitor.maxSleepTime);
       if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min || max > 86400) {
         return this.$message().error('随机等待范围无效');
       }
+      if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 5) {
+        return this.$message().error('监控页数必须是 1 到 5 之间的整数');
+      }
+      if (!Number.isInteger(maxSleepTime) || maxSleepTime < 1 || maxSleepTime > 86400) {
+        return this.$message().error('最长休眠时间必须是 1 到 86400 之间的整数');
+      }
       try {
-        await this.$api().webMonitor.modify({ ...this.monitor, minIntervalSeconds: min, maxIntervalSeconds: max });
+        await this.$api().webMonitor.modify({ ...this.monitor, minIntervalSeconds: min, maxIntervalSeconds: max, pageCount, maxSleepTime });
         this.$message().success((this.monitor.id ? '编辑' : '新增') + '成功');
         this.clearMonitor();
         await this.listMonitor();

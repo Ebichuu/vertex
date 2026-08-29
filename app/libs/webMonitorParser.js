@@ -20,6 +20,26 @@ const parseSizeText = function (sizeText) {
   return parseFloat(match[1]) * unitMap[match[2].toLowerCase()];
 };
 
+exports.buildChdPageUrls = function (pageUrl, pageCount = 2) {
+  const url = new URL(pageUrl);
+  const count = Math.max(1, Math.min(5, Math.floor(Number(pageCount) || 2)));
+  if (!/\/torrents\.php$/i.test(url.pathname)) return [url.toString()];
+
+  url.searchParams.set('allsec', '1');
+  url.searchParams.set('inclbookmarked', '0');
+  url.searchParams.set('incldead', '0');
+  url.searchParams.set('spstate', '0');
+  url.searchParams.set('sort', '4');
+  url.searchParams.set('type', 'desc');
+  url.searchParams.delete('page');
+
+  return Array.from({ length: count }, (_, page) => {
+    const pageUrl = new URL(url.toString());
+    if (page > 0) pageUrl.searchParams.set('page', String(page));
+    return pageUrl.toString();
+  });
+};
+
 exports.parseChd = function (html, pageUrl, cookie) {
   const document = new JSDOM(html, { url: pageUrl }).window.document;
   const loginForm = document.querySelector('form[action*="takelogin"]');

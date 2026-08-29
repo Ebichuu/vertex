@@ -15,6 +15,8 @@ class WebMonitorMod {
     monitor.targetSharedSource = (monitor.targetSharedSource || '').trim();
     monitor.minIntervalSeconds = Math.floor(Number(monitor.minIntervalSeconds) || 11);
     monitor.maxIntervalSeconds = Math.floor(Number(monitor.maxIntervalSeconds) || 61);
+    monitor.pageCount = Math.floor(Number(monitor.pageCount) || 2);
+    monitor.maxSleepTime = Math.floor(Number(monitor.maxSleepTime) || 600);
     return monitor;
   }
 
@@ -34,6 +36,12 @@ class WebMonitorMod {
     }
     if (!Number.isInteger(monitor.maxIntervalSeconds) || monitor.maxIntervalSeconds < monitor.minIntervalSeconds || monitor.maxIntervalSeconds > 86400) {
       throw new Error('最长间隔必须大于等于最短间隔，且不能超过 86400 秒');
+    }
+    if (!Number.isInteger(monitor.pageCount) || monitor.pageCount < 1 || monitor.pageCount > 5) {
+      throw new Error('监控页数必须是 1 到 5 之间的整数');
+    }
+    if (!Number.isInteger(monitor.maxSleepTime) || monitor.maxSleepTime < 1 || monitor.maxSleepTime > 86400) {
+      throw new Error('最长休眠时间必须是 1 到 86400 之间的整数');
     }
   }
 
@@ -73,6 +81,8 @@ class WebMonitorMod {
       const running = global.runningWebMonitor[item.id];
       return {
         ...item,
+        pageCount: item.pageCount || 2,
+        maxSleepTime: item.maxSleepTime || 600,
         status: running
           ? running.status()
           : {
@@ -81,6 +91,9 @@ class WebMonitorMod {
             lastCheckTime: 0,
             lastSuccessTime: 0,
             lastFoundTime: 0,
+            lastReadCount: 0,
+            lastNewCount: 0,
+            lastSkippedCount: 0,
             lastError: ''
           }
       };

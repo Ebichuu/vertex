@@ -1,5 +1,6 @@
 const { TaskQueue } = require('../redis');
 const logger = require('../logger');
+const TorrentBatchBuffer = require('./TorrentBatchBuffer');
 
 class RssTaskQueue extends TaskQueue {
   constructor() {
@@ -16,6 +17,9 @@ class RssTaskQueue extends TaskQueue {
     this.failedRssSources = new Map(); // rssId -> { count, lastFailTime, blocked }
     this.blockDuration = 10 * 60 * 1000; // RSS源阻塞10分钟（比客户端长，给更多恢复时间）
     this.maxFailuresBeforeBlock = 5; // 5次连续失败后阻塞（更谨慎，避免因偶发流控阻塞）
+    this.torrentBatches = new TorrentBatchBuffer();
+    this.queuedTorrentBatches = new Set();
+    this.runningTorrentBatches = new Set();
   }
 
   // 检查RSS源是否被阻塞
@@ -124,8 +128,30 @@ class RssTaskQueue extends TaskQueue {
       return;
     }
 
+    if (taskData.action === 'fetchRss' && Array.isArray(taskData.params?.torrents)) {
+      this.torrentBatches.merge(rssId, taskData.params.torrents);
+      return this._ensureTorrentBatchQueued(rssId, priority);
+    }
+
     const dedupeConfig = this._getDedupeConfig(taskData);
     return super.enqueue(taskData, priority, dedupeConfig);
+  }
+
+  async _ensureTorrentBatchQueued (rssId, priority = 'normal') {
+    if (!this.torrentBatches.size(rssId) || this.queuedTorrentBatches.has(rssId) || this.runningTorrentBatches.has(rssId)) {
+      return;
+    }
+    this.queuedTorrentBatches.add(rssId);
+    try {
+      return await super.enqueue({
+        rssId,
+        action: 'fetchRss',
+        params: { bufferedTorrents: true }
+      }, priority);
+    } catch (error) {
+      this.queuedTorrentBatches.delete(rssId);
+      throw error;
+    }
   }
 
   // 获取阻塞状态信息
@@ -152,10 +178,18 @@ class RssTaskQueue extends TaskQueue {
       this.failedRssSources.delete(rssId);
       logger.info(`已清除RSS源 ${rssId} 的阻塞状态`);
     }
+    this.torrentBatches.clear(rssId);
+    this.queuedTorrentBatches.delete(rssId);
+    this.runningTorrentBatches.delete(rssId);
   }
 
   async executeTask(task) {
     const { rssId, action, params } = task.data;
+    const bufferedTorrents = action === 'fetchRss' && params?.bufferedTorrents;
+    if (bufferedTorrents) {
+      this.queuedTorrentBatches.delete(rssId);
+      this.runningTorrentBatches.add(rssId);
+    }
     
     try {
       // 再次检查阻塞状态
@@ -174,10 +208,17 @@ class RssTaskQueue extends TaskQueue {
       const startTime = Date.now();
 
       const timeoutMs = this._getActionTimeout(action, task.data);
+      let taskParams = params;
+      if (bufferedTorrents) {
+        if (rssInstance.isRunning) return;
+        taskParams = { torrents: this.torrentBatches.drain(rssId) };
+        if (taskParams.torrents.length === 0) return;
+      }
+
       const taskPromise = (async () => {
         switch (action) {
           case 'fetchRss':
-            return await this.executeFetchRss(rssInstance, params);
+            return await this.executeFetchRss(rssInstance, taskParams);
           case 'clearCount':
             return await this.executeClearCount(rssInstance);
           default:
@@ -223,6 +264,17 @@ class RssTaskQueue extends TaskQueue {
       
       // 不再重新抛出错误，让任务队列继续处理下一个任务
       logger.error(`RSS任务失败已处理: ${rssId}, 继续处理下一个任务`);
+    } finally {
+      if (bufferedTorrents) {
+        this.runningTorrentBatches.delete(rssId);
+        if (!global.runningRss[rssId]) {
+          this.torrentBatches.clear(rssId);
+        } else if (this.torrentBatches.size(rssId) && !this.isRssBlocked(rssId)) {
+          setTimeout(() => this._ensureTorrentBatchQueued(rssId).catch(error => {
+            logger.error(`重新调度合并 RSS 批次失败: ${rssId}`, error);
+          }), 100);
+        }
+      }
     }
   }
 
