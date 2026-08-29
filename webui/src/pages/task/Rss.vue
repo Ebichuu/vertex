@@ -164,7 +164,7 @@
           label="分流优先级"
           name="sharedSourcePriority"
           extra="数值越大越先匹配；同一个种子只会进入第一个规则匹配的任务">
-          <a-input-number size="small" v-model:value="rss.sharedSourcePriority" :precision="0" style="width: 180px"/>
+          <a-input size="small" v-model:value="rss.sharedSourcePriority" type="number" step="1" style="width: 180px"/>
         </a-form-item>
         <a-form-item
           label="下载链接域名替换"
@@ -230,9 +230,9 @@
           v-else
           label="间隔秒数"
           name="intervalSeconds"
-          extra="允许 1 到 86400 秒；CHD 建议填写 63"
-          :rules="[{ required: true, type: 'number', min: 1, max: 86400, message: '请输入 1 到 86400 之间的整数' }]">
-          <a-input-number size="small" v-model:value="rss.intervalSeconds" :min="1" :max="86400" :precision="0" style="width: 180px"/>
+          extra="允许 1 到 86400 秒"
+          :rules="[{ required: true, message: '间隔秒数不可为空' }, { validator: validateIntervalSeconds, trigger: 'change' }]">
+          <a-input size="small" v-model:value="rss.intervalSeconds" type="number" min="1" max="86400" step="1" style="width: 180px"/>
         </a-form-item>
         <a-form-item
           label="推送通知"
@@ -531,6 +531,13 @@ export default {
     };
   },
   methods: {
+    validateIntervalSeconds (_rule, value) {
+      const intervalSeconds = Number(value);
+      if (!Number.isInteger(intervalSeconds) || intervalSeconds < 1 || intervalSeconds > 86400) {
+        return Promise.reject(new Error('请输入 1 到 86400 之间的整数'));
+      }
+      return Promise.resolve();
+    },
     isMobile () {
       if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
         return true;
