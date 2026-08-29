@@ -1,108 +1,93 @@
-name: Build Vertex-Optimized Docker Image
+name: Build Vertex Docker Image
 
 on:
   push:
     branches:
-    - stable
-    - dev
-    - main
+      - stable
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY_IMAGE: ghcr.io/ebichuu/vertex
 
 jobs:
   build_docker_image:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - run: git fetch --prune --unshallow
-    - name: Use Node.js 18.x
-      uses: actions/setup-node@v3
-      with:
-        node-version: 18.x
-        cache: 'npm'
-    - name: Prepare ENV
-      run: |
-        CI_COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
-        CI_COMMIT_MESSAGE=`echo $CI_COMMIT_MESSAGE | sed 's/\n//g'`
-        CI_COMMIT_BRANCH=$GITHUB_REF_NAME
-        CI_COMMIT_TIMESTAMP="${{ github.event.head_commit.timestamp }}"
-        PUSH_TIME=$(TZ=Asia/Shanghai date -d $CI_COMMIT_TIMESTAMP "+%Y-%m-%d %H:%M:%S")
-        TIMEVERSION=$(TZ=Asia/Shanghai date -d $CI_COMMIT_TIMESTAMP "+%Y.%m.%d")
-        echo "PUSH_TIME=$PUSH_TIME" >> $GITHUB_ENV
-        echo "CI_COMMIT_MESSAGE=$CI_COMMIT_MESSAGE" >> $GITHUB_ENV
-        echo "CI_COMMIT_BRANCH=$CI_COMMIT_BRANCH" >> $GITHUB_ENV
-        echo "CI_COMMIT_SHA=${{ github.event.head_commit.id }}" >> $GITHUB_ENV
-        echo "IMAGE_TAG_LATEST=wexwell/vertex-optimized:latest" >> $GITHUB_ENV
-        echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
-        echo "IMAGE_TAG_BRANCH=wexwell/vertex-optimized:$CI_COMMIT_BRANCH" >> $GITHUB_ENV
-        echo "IMAGE_TAG_TIMEVERSION=wexwell/vertex-optimized:$TIMEVERSION" >> $GITHUB_ENV
-        echo "PUSH_TIME=$PUSH_TIME" >> $GITHUB_ENV
-    - name: Install Dependencies
-      run: |
-        npm i --save-dev
-        cd webui
-        npm i --legacy-peer-deps --save-dev
-    - name: Auto-fix ESLint Issues
-      run: |
-        npm run eslint -- --fix || true
-        cd webui
-        npm run eslint -- --fix || true
-    - name: Eslint
-      run: |
-        npm run eslint
-        cd webui
-        npm run eslint
-    - name: Prepare Theme Files
-      working-directory: ./webui
-      run: |
-        mkdir ./public/assets/styles
-        node dark
-        node light
-        node cyber
-        echo '@import url(/api/setting/getBackground.less);' >> ./public/assets/styles/cyber.less
-        echo '.body-bg {' >> ./public/assets/styles/cyber.less
-        echo '  background:@vt-bg-image;' >> ./public/assets/styles/cyber.less
-        echo '  background-position-x:center;' >> ./public/assets/styles/cyber.less
-        echo '  background-position-y:center;' >> ./public/assets/styles/cyber.less
-        echo '  background-size:cover;' >> ./public/assets/styles/cyber.less
-        echo '}' >> ./public/assets/styles/cyber.less
-        echo '' >> ./public/assets/styles/cyber.less
-        echo '.login-layout {' >> ./public/assets/styles/cyber.less
-        echo '  background:@body-background;' >> ./public/assets/styles/cyber.less
-        echo '}' >> ./public/assets/styles/cyber.less
-        echo '' > ./public/assets/styles/follow.less
-    - name: Build Static Files
-      working-directory: ./webui
-      run: |
-        npm run build
-    - name: Prepare Docker Env
-      run: |
-        docker info
-        docker run --privileged --rm tonistiigi/binfmt --install all
-        mkdir -p ~/.docker/cli-plugins
-        wget "https://github.com/docker/buildx/releases/download/v0.7.1/buildx-v0.7.1.linux-arm64" -qO ~/.docker/cli-plugins/docker-buildx
-        chmod +x ~/.docker/cli-plugins/docker-buildx
-        docker context create context_name
-        docker buildx create --name buildx_name --use context_name
-        docker buildx inspect --bootstrap
-        docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
-        mkdir docker/src
-        mv app/static docker/src
-        cd docker
-        sed -i 's/COMMIT_ID/'$CI_COMMIT_SHA'/' Dockerfile
-        ls src/static
-        docker pull --platform linux/arm64 wexwell/vertex-optimized:latest || echo 'fail'
-        docker pull --platform linux/amd64 wexwell/vertex-optimized:latest || echo 'fail'
-    - name: Build Docker Images
-      working-directory: ./docker
-      run: |
-        docker buildx build --platform linux/amd64,linux/arm64 --cache-from wexwell/vertex-optimized --tag $IMAGE_TAG_LATEST --build-arg BUILDKIT_INLINE_CACHE=1 . --push
-        docker buildx build --platform linux/amd64,linux/arm64 --cache-from wexwell/vertex-optimized --tag $IMAGE_TAG_BRANCH --build-arg BUILDKIT_INLINE_CACHE=1 . --push
-        docker buildx build --platform linux/amd64,linux/arm64 --cache-from wexwell/vertex-optimized --tag $IMAGE_TAG_TIMEVERSION --build-arg BUILDKIT_INLINE_CACHE=1 . --push
-    - name: Build Success Notification
-      run: |
-        echo "🎉 Docker镜像构建成功！"
-        echo "📦 镜像标签："
-        echo "   - $IMAGE_TAG_LATEST"
-        echo "   - $IMAGE_TAG_BRANCH" 
-        echo "   - $IMAGE_TAG_TIMEVERSION"
-        echo "🚀 使用方法："
-        echo "   docker pull $IMAGE_TAG_LATEST"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm i --save-dev
+          cd webui
+          npm i --legacy-peer-deps --save-dev
+
+      - name: Prepare theme files
+        working-directory: ./webui
+        run: |
+          mkdir -p ./public/assets/styles
+          node dark
+          node light
+          node cyber
+          echo '@import url(/api/setting/getBackground.less);' >> ./public/assets/styles/cyber.less
+          echo '.body-bg {' >> ./public/assets/styles/cyber.less
+          echo '  background:@vt-bg-image;' >> ./public/assets/styles/cyber.less
+          echo '  background-position-x:center;' >> ./public/assets/styles/cyber.less
+          echo '  background-position-y:center;' >> ./public/assets/styles/cyber.less
+          echo '  background-size:cover;' >> ./public/assets/styles/cyber.less
+          echo '}' >> ./public/assets/styles/cyber.less
+          echo '' >> ./public/assets/styles/cyber.less
+          echo '.login-layout {' >> ./public/assets/styles/cyber.less
+          echo '  background:@body-background;' >> ./public/assets/styles/cyber.less
+          echo '}' >> ./public/assets/styles/cyber.less
+          echo '' > ./public/assets/styles/follow.less
+
+      - name: Build static files
+        working-directory: ./webui
+        run: npm run build
+
+      - name: Prepare Docker context
+        run: |
+          mkdir -p docker/src
+          mv app/static docker/src/static
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:latest
+            ${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }}
+            ${{ env.REGISTRY_IMAGE }}:sha-${{ github.sha }}
+          build-args: |
+            VERTEX_REPOSITORY=https://github.com/${{ github.repository }}.git
+            COMMIT_ID=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,13 +1,16 @@
 FROM lswl/vertex-base:latest
 LABEL maintainer="lswl@lswl.in, xwell@github.com"
-LABEL build_from="https://github.com/xwell/vertex"
+LABEL build_from="https://github.com/Ebichuu/vertex"
+
+ARG VERTEX_REPOSITORY=https://github.com/xwell/vertex.git
+ARG COMMIT_ID=stable
 
 ENV TZ=Asia/Shanghai
 RUN \
   apk add --no-cache gcc g++ python3 git cmake make npm libc-dev && \
-  git clone https://github.com/xwell/vertex.git /app/vertex && \
+  git clone "$VERTEX_REPOSITORY" /app/vertex && \
   cd /app/vertex && \
-  git checkout COMMIT_ID && \
+  git checkout "$COMMIT_ID" && \
   rm .git webui -rf && \
   PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm i --save && \
   mkdir /vertex && \

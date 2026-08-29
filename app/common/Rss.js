@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
 const RssTaskQueue = require('../libs/queues/RssTaskQueue');
+const RssSourceManager = require('../libs/RssSourceManager');
 const rateLimiter = require('../libs/rate-limiter');
 const Push = require('./Push');
 
@@ -27,6 +28,10 @@ class Rss {
     this.rateLimitResetReady = this._resetRateLimitCounter();
     this.alias = rss.alias;
     this.urls = rss.rssUrls;
+    this.scheduleType = rss.scheduleType === 'interval' ? 'interval' : 'cron';
+    this.intervalSeconds = Math.max(1, Math.floor(Number(rss.intervalSeconds) || 60));
+    this.sharedSource = (rss.sharedSource || '').trim();
+    this.sharedSourcePriority = Number(rss.sharedSourcePriority) || 0;
     this.clientArr = rss.clientArr || [rss.client];
     this.clientSortBy = rss.clientSortBy;
     this.autoReseed = rss.autoReseed;
@@ -69,13 +74,39 @@ class Rss {
     this.maxClientDownloadSpeed = util.calSize(rss.maxClientDownloadSpeed, rss.maxClientDownloadSpeedUnit);
     this.maxClientDownloadCount = +rss.maxClientDownloadCount;
     this.isRunning = false;
+    this.isDestroyed = false;
+    this.intervalTimer = null;
     if (!rss.dryrun) {
-      // 修改为入队操作
-      this.rssJob = cron.schedule(rss.cron, () => this.scheduleRssFetch());
+      if (this.sharedSource) {
+        if (!global.rssSourceManager) {
+          global.rssSourceManager = new RssSourceManager();
+        }
+        this.sourceManager = global.rssSourceManager;
+        this.sourceManager.register(this);
+      } else if (this.scheduleType === 'interval') {
+        this._scheduleInterval(this.intervalSeconds * 1000);
+      } else {
+        // 兼容原有 Cron 调度方式
+        this.rssJob = cron.schedule(rss.cron, () => this.scheduleRssFetch());
+      }
       this.clearCount = cron.schedule('0 * * * *', () => this.scheduleClearCount());
 
       logger.info('Rss 任务', this.alias, '初始化完毕');
     }
+  }
+
+  _scheduleInterval (delay) {
+    if (this.isDestroyed) return;
+    this.intervalTimer = setTimeout(async () => {
+      const startedAt = Date.now();
+      try {
+        await this.scheduleRssFetch();
+      } finally {
+        const elapsed = Date.now() - startedAt;
+        const nextDelay = Math.max(0, this.intervalSeconds * 1000 - elapsed);
+        this._scheduleInterval(nextDelay);
+      }
+    }, delay);
   }
 
   _getRuleHostname(host) {
@@ -314,12 +345,31 @@ class Rss {
     }
   }
 
+  matchesSharedTorrent (torrent) {
+    if (this.rejectRules.some(rule => this._fitRule(rule, torrent))) return false;
+    if (this.acceptRules.length === 0) return true;
+    return this.acceptRules.some(rule => this._fitRule(rule, torrent));
+  }
+
   destroy() {
     logger.info('销毁 Rss 实例:', this.alias);
-    this.rssJob.stop();
-    delete this.rssJob;
-    this.clearCount.stop();
-    delete this.clearCount;
+    this.isDestroyed = true;
+    if (this.sourceManager && this.sharedSource) {
+      this.sourceManager.unregister(this);
+      delete this.sourceManager;
+    }
+    if (this.rssJob) {
+      this.rssJob.stop();
+      delete this.rssJob;
+    }
+    if (this.intervalTimer) {
+      clearTimeout(this.intervalTimer);
+      this.intervalTimer = null;
+    }
+    if (this.clearCount) {
+      this.clearCount.stop();
+      delete this.clearCount;
+    }
 
     // 设置实例为非运行状态
     this.isRunning = false;
@@ -1575,13 +1625,17 @@ class Rss {
   }
 
   // 调度RSS获取任务
-  async scheduleRssFetch() {
+  async scheduleRssFetch (torrents) {
     try {
       await this._persistLastAttemptTime(moment().unix());
-      await this.taskQueue.enqueue({
+      const taskData = {
         rssId: this.id,
         action: 'fetchRss'
-      });
+      };
+      if (Array.isArray(torrents)) {
+        taskData.params = { torrents };
+      }
+      await this.taskQueue.enqueue(taskData);
     } catch (error) {
       logger.error(`调度RSS任务失败: ${this.alias}`, error);
     }

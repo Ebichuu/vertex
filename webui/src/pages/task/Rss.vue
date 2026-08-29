@@ -8,7 +8,7 @@
       size="small"
       :data-source="rssList"
       :pagination="false"
-      :scroll="{ x: 640 }"
+      :scroll="{ x: 820 }"
     >
       <template #title>
         <span style="font-size: 16px; font-weight: bold;">RSS 任务列表</span>
@@ -19,6 +19,12 @@
         </template>
         <template v-if="column.dataIndex === 'clientArr'">
           {{ downloaders.filter(item => record.clientArr.indexOf(item.id) !== -1).map(item => item.alias).join(' / ') }}
+        </template>
+        <template v-if="column.dataIndex === 'schedule'">
+          {{ record.scheduleType === 'interval' ? `${record.intervalSeconds} 秒` : record.cron }}
+        </template>
+        <template v-if="column.dataIndex === 'sharedSource'">
+          {{ record.sharedSource || '-' }}
         </template>
         <template v-if="column.dataIndex === 'pushNotify'">
           <a-tag color="success" v-if="record.pushNotify">启用</a-tag>
@@ -148,6 +154,19 @@
           </a-button>
         </a-form-item>
         <a-form-item
+          label="共享源标识"
+          name="sharedSource"
+          extra="可选。多个任务填写相同标识、相同 RSS 链接和相同调度配置时，只抓取一次，并按任务优先级互斥分流">
+          <a-input size="small" v-model:value="rss.sharedSource" placeholder="例如 CHD-MAIN"/>
+        </a-form-item>
+        <a-form-item
+          v-if="rss.sharedSource"
+          label="分流优先级"
+          name="sharedSourcePriority"
+          extra="数值越大越先匹配；同一个种子只会进入第一个规则匹配的任务">
+          <a-input-number size="small" v-model:value="rss.sharedSourcePriority" :precision="0" style="width: 180px"/>
+        </a-form-item>
+        <a-form-item
           label="下载链接域名替换"
           name="downloadUrlReplaceRules"
           extra="仅替换 RSS 种子下载链接的域名，不影响 RSS 地址、路径和参数。例如 pt.agsvpt.cn -> www.agsvpt.com">
@@ -190,11 +209,30 @@
           <a-input size="small" v-model:value="rss.cookie"/>
         </a-form-item>
         <a-form-item
+          label="调度方式"
+          name="scheduleType"
+          extra="秒级间隔按两次调度开始时间计算，上一轮未完成时不会并发执行"
+          :rules="[{ required: true, message: '${label}不可为空! ' }]">
+          <a-select size="small" v-model:value="rss.scheduleType" style="width: 180px">
+            <a-select-option value="cron">Cron 表达式</a-select-option>
+            <a-select-option value="interval">秒级间隔</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item
+          v-if="rss.scheduleType === 'cron'"
           label="Rss 周期"
           name="cron"
           extra="Rss Cron 表达式, 默认为 1 分钟更新一次"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
           <a-input size="small" v-model:value="rss.cron"/>
+        </a-form-item>
+        <a-form-item
+          v-else
+          label="间隔秒数"
+          name="intervalSeconds"
+          extra="允许 1 到 86400 秒；CHD 建议填写 63"
+          :rules="[{ required: true, type: 'number', min: 1, max: 86400, message: '请输入 1 到 86400 之间的整数' }]">
+          <a-input-number size="small" v-model:value="rss.intervalSeconds" :min="1" :max="86400" :precision="0" style="width: 180px"/>
         </a-form-item>
         <a-form-item
           label="推送通知"
@@ -421,6 +459,14 @@ export default {
         dataIndex: 'enable',
         width: 15
       }, {
+        title: '调度',
+        dataIndex: 'schedule',
+        width: 24
+      }, {
+        title: '共享源',
+        dataIndex: 'sharedSource',
+        width: 24
+      }, {
         title: '下载器',
         dataIndex: 'clientArr',
         width: 40
@@ -467,7 +513,11 @@ export default {
         maxSleepTime: 600,
         skipSameTorrent: true,
         pushTorrentFile: true,
+        scheduleType: 'cron',
+        intervalSeconds: 60,
         cron: '* * * * *',
+        sharedSource: '',
+        sharedSourcePriority: 0,
         addCountPerHour: '',
         pushNotify: false,
         acceptRules: [],
@@ -557,6 +607,10 @@ export default {
     modifyClick (row) {
       this.rss = JSON.parse(JSON.stringify(row));
       this.rss.downloadUrlReplaceRules = this.rss.downloadUrlReplaceRules || [];
+      this.rss.scheduleType = this.rss.scheduleType === 'interval' ? 'interval' : 'cron';
+      this.rss.intervalSeconds = Number(this.rss.intervalSeconds) || 60;
+      this.rss.sharedSource = this.rss.sharedSource || '';
+      this.rss.sharedSourcePriority = Number(this.rss.sharedSourcePriority) || 0;
     },
     cloneClick (row) {
       this.rss = JSON.parse(JSON.stringify(row));
