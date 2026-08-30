@@ -25,7 +25,7 @@ class ClientTaskQueue {
     };
 
     this.activeClientTasks = new Map();
-    this.lowPriorityActions = new Set(['record', 'autoReannounce']);
+    this.lowPriorityActions = new Set(['autoReannounce']);
     this.busyRetryDelayMs = 5000;
 
     this.failedClients = new Map();
@@ -66,6 +66,8 @@ class ClientTaskQueue {
     let key = `vertex:queue:dedupe:client:${clientId}:${action}`;
     if (action === 'flashFitTime' && params?.rule?.id) {
       key = `${key}:${params.rule.id}`;
+    } else if (action === 'record' && params?.sampleTime) {
+      key = `${key}:${params.sampleTime}`;
     }
     const timeoutMs = this._getActionTimeout(action, taskData);
     const ttlSeconds = Math.ceil(timeoutMs / 1000) + 60;
@@ -427,7 +429,7 @@ class ClientTaskQueue {
           case 'autoReannounce':
             return await this.executeAutoReannounce(client);
           case 'record':
-            return await this.executeRecord(client);
+            return await this.executeRecord(client, params);
           case 'flashFitTime':
             return await this.executeFlashFitTime(client, params);
           default:
@@ -561,9 +563,9 @@ class ClientTaskQueue {
     return await client.autoReannounce();
   }
 
-  async executeRecord(client) {
+  async executeRecord(client, params) {
     logger.debug(`执行记录任务: ${client.alias}`);
-    return await client.record();
+    return await client.record(params?.sampleTime);
   }
 
   async executeFlashFitTime(client, params) {

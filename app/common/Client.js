@@ -630,11 +630,11 @@ class Client {
     }
   };
 
-  async record() {
+  async record(sampleTime) {
     if (!this.maindata) return;
     const torrentSet = {};
-    const now = moment().startOf('minute').unix();
-    const allTorrentLastMinute = await util.getRecords('select * from torrent_flow where time = ?', [moment().startOf('minute').subtract(5, 'minute').unix()]);
+    const now = Number.isFinite(sampleTime) ? sampleTime : moment().startOf('minute').unix();
+    const allTorrentLastMinute = await util.getRecords('select * from torrent_flow where time = ?', [now - 5 * 60]);
     allTorrentLastMinute.forEach(i => {
       torrentSet[i.hash] = i;
     });
@@ -864,7 +864,10 @@ class Client {
     try {
       await this.taskQueue.enqueue({
         clientId: this.id,
-        action: 'record'
+        action: 'record',
+        params: {
+          sampleTime: moment().startOf('minute').unix()
+        }
       });
     } catch (error) {
       logger.error(`调度记录任务失败: ${this.alias}`, error);
