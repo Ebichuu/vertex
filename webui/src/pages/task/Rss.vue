@@ -82,6 +82,7 @@
             <a-select-option value="uploadSpeed">当前上传速度</a-select-option>
             <a-select-option value="downloadSpeed">当前下载速度</a-select-option>
             <a-select-option value="freeSpaceOnDisk">当前剩余空间</a-select-option>
+            <a-select-option value="loadBalance">综合负载均衡（上传/任务/空间）</a-select-option>
           </a-select>
         </a-form-item>
         <a-form-item

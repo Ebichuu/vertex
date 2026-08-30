@@ -13,6 +13,7 @@ const RssSourceManager = require('../libs/RssSourceManager');
 const rateLimiter = require('../libs/rate-limiter');
 const Push = require('./Push');
 const ClientAllocationCursor = require('../libs/ClientAllocationCursor');
+const ClientLoadBalancer = require('../libs/ClientLoadBalancer');
 
 class Rss {
   constructor(rss) {
@@ -986,8 +987,39 @@ class Rss {
       logger.debug(`下载器: ${client.alias}, 上传带宽: ${util.formatSize(clientSpeed)}/s, 平方根权重比: ${uploadSpeedWeight.toFixed(4)}, 最终权重: ${clientWeights[client.id].toFixed(2)}`);
     });
 
+    if (this.clientSortBy === 'loadBalance') {
+      const loadBalancer = new ClientLoadBalancer(availableClients, this.clientAllocationCursor);
+      availableClients.forEach(client => {
+        clientAssignments[client.id] = [];
+      });
+
+      newTorrents.sort((a, b) => +b.size - +a.size);
+      const rejectedNoSpace = [];
+      for (const torrent of newTorrents) {
+        const selectedClient = loadBalancer.select(torrent.size);
+        if (!selectedClient) {
+          rejectedNoSpace.push(torrent);
+          logger.warn(this.alias, `综合负载均衡无法分配种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)})，所有下载器空间不足`);
+          continue;
+        }
+
+        clientAssignments[selectedClient.id].push(torrent);
+        logger.debug(this.alias, `综合负载均衡: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给 ${selectedClient.alias}`);
+      }
+
+      if (rejectedNoSpace.length > 0) {
+        await this._batchRejectTorrents(rejectedNoSpace, '拒绝原因: 所有下载器空间不足');
+      }
+
+      for (const row of loadBalancer.getScoreDetails()) {
+        logger.debug(this.alias, `综合负载评分: ${row.client.alias}, ` +
+          `总分=${row.score.toFixed(4)}, 上传压力=${row.uploadPressure.toFixed(4)}, ` +
+          `任务压力=${row.torrentPressure.toFixed(4)}, 空间压力=${row.spacePressure.toFixed(4)}, ` +
+          `本轮分配=${loadBalancer.plannedTorrentCount[row.client.id]}`);
+      }
+      await this.clientAllocationCursor.persist();
     // 当排序规则是"当前剩余空间"时，进行高带宽优先的智能分配
-    if (this.clientSortBy === 'freeSpaceOnDisk') {
+    } else if (this.clientSortBy === 'freeSpaceOnDisk') {
       const clientTotalSize = {};
       const clientTorrentCount = {};
 

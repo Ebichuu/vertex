@@ -6,7 +6,7 @@
   "scripts": {
     "app": "export HTTPS_PORT=4443 && export HTTPS_ENABLE=true && export DISPLAY=:99 && export PORT=4000 && nodemon app/app.js",
     "eslint": "eslint app",
-    "test": "node test/webMonitor.test.js && node test/clientAllocationCursor.test.js"
+    "test": "node test/webMonitor.test.js && node test/clientAllocationCursor.test.js && node test/clientLoadBalancer.test.js"
   },
   "author": "",
   "license": "MIT",
