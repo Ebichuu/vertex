@@ -12,6 +12,7 @@ const RssTaskQueue = require('../libs/queues/RssTaskQueue');
 const RssSourceManager = require('../libs/RssSourceManager');
 const rateLimiter = require('../libs/rate-limiter');
 const Push = require('./Push');
+const ClientAllocationCursor = require('../libs/ClientAllocationCursor');
 
 class Rss {
   constructor(rss) {
@@ -27,6 +28,13 @@ class Rss {
     this.rateLimitKey = `vertex:rss:rate:${this.id}`;
     this.rateLimitResetReady = this._resetRateLimitCounter();
     this.alias = rss.alias;
+    this.clientAllocationCursor = new ClientAllocationCursor({
+      rssId: this.id,
+      store: redis,
+      logger,
+      alias: this.alias
+    });
+    this.clientAllocationCursorReady = this.clientAllocationCursor.load();
     this.urls = rss.rssUrls;
     this.scheduleType = rss.scheduleType === 'interval' ? 'interval' : 'cron';
     this.intervalSeconds = Math.max(1, Math.floor(Number(rss.intervalSeconds) || 60));
@@ -761,6 +769,10 @@ class Rss {
       await this.rateLimitResetReady;
       this.rateLimitResetReady = null;
     }
+    if (this.clientAllocationCursorReady) {
+      await this.clientAllocationCursorReady;
+      this.clientAllocationCursorReady = null;
+    }
     const startTime = moment();
     logger.debug(this.alias, 'RSS任务开始执行');
 
@@ -1123,36 +1135,22 @@ class Rss {
             realBandwidth[b.id] - realBandwidth[a.id]
           );
 
-          // 平均分配策略
-          let currentClientIndex = 0;
-
           for (const torrent of highBwTorrents) {
-            // 循环选择高带宽客户端
-            let assigned = false;
-            let startIndex = currentClientIndex;
+            const client = this.clientAllocationCursor.select(
+              sortedHighBwClients,
+              item => clientAvailableSpace[item.id] > clientTotalSize[item.id] + +torrent.size
+            );
 
-            do {
-              const client = sortedHighBwClients[currentClientIndex];
-              // 检查是否有足够空间
-              if (clientAvailableSpace[client.id] > clientTotalSize[client.id] + +torrent.size) {
-                clientAssignments[client.id].push(torrent);
-                clientTotalSize[client.id] += +torrent.size;
-                clientTorrentCount[client.id]++;
-                assigned = true;
+            if (client) {
+              clientAssignments[client.id].push(torrent);
+              clientTotalSize[client.id] += +torrent.size;
+              clientTorrentCount[client.id]++;
 
-                logger.debug(`高带宽分配: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给高带宽下载器 ${client.alias} (${util.formatSize(realBandwidth[client.id])}/s)`);
-
-                // 移动到下一个客户端
-                currentClientIndex = (currentClientIndex + 1) % sortedHighBwClients.length;
-                break;
-              }
-
-              // 尝试下一个客户端
-              currentClientIndex = (currentClientIndex + 1) % sortedHighBwClients.length;
-            } while (currentClientIndex !== startIndex);
+              logger.debug(`高带宽分配: 种子 "${torrent.name.substring(0, 30)}..." (${util.formatSize(torrent.size)}) 分配给高带宽下载器 ${client.alias} (${util.formatSize(realBandwidth[client.id])}/s)`);
+            }
 
             // 如果无法分配给高带宽客户端，添加到常规带宽种子列表
-            if (!assigned) {
+            if (!client) {
               normalBwTorrents.push(torrent);
             }
           }
@@ -1194,13 +1192,18 @@ class Rss {
             }
 
             // 优先分配给已分配种子数量/权重比最低的客户端
-            eligibleClients.sort((a, b) =>
-              (clientTorrentCount[a.id] / clientWeights[a.id]) -
-              (clientTorrentCount[b.id] / clientWeights[b.id])
+            const allocationScore = client => clientTorrentCount[client.id] / clientWeights[client.id];
+            eligibleClients.sort((a, b) => allocationScore(a) - allocationScore(b));
+
+            const bestScore = allocationScore(eligibleClients[0]);
+            const bestWeight = clientWeights[eligibleClients[0].id];
+            const tiedClients = eligibleClients.filter(client =>
+              Math.abs(allocationScore(client) - bestScore) < 1e-12 &&
+              Math.abs(clientWeights[client.id] - bestWeight) < 1e-12
             );
 
             // 分配种子
-            const selectedClient = eligibleClients[0];
+            const selectedClient = this.clientAllocationCursor.select(tiedClients);
             clientAssignments[selectedClient.id].push(torrent);
             clientTotalSize[selectedClient.id] += +torrent.size;
             clientTorrentCount[selectedClient.id]++;
@@ -1227,9 +1230,11 @@ class Rss {
 
               // 优先考虑带宽较高的备选客户端
               eligibleClients.sort((a, b) => realBandwidth[b.id] - realBandwidth[a.id]);
+              const bestBandwidth = realBandwidth[eligibleClients[0].id];
+              const tiedClients = eligibleClients.filter(client => realBandwidth[client.id] === bestBandwidth);
 
               // 分配种子
-              const selectedClient = eligibleClients[0];
+              const selectedClient = this.clientAllocationCursor.select(tiedClients);
               clientAssignments[selectedClient.id].push(torrent);
               clientTotalSize[selectedClient.id] += +torrent.size;
               clientTorrentCount[selectedClient.id]++;
@@ -1275,6 +1280,7 @@ class Rss {
           `空间利用率: ${spaceUtilization}%, ` +
           `计算后剩余空间: ${util.formatSize(clientAvailableSpace[clientId] - clientTotalSize[clientId])}`);
       }
+      await this.clientAllocationCursor.persist();
     } else if (this.clientSortBy === 'uploadSpeed') {
       // 专门针对上传速度进行的智能分配 - 综合考虑服务器类型、下载任务数量和实际上传性能
       const clientTorrentCount = {};
