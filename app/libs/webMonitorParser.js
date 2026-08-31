@@ -4,6 +4,8 @@ const { JSDOM } = require('jsdom');
 
 const torrentIdentity = require('./torrentIdentity');
 
+const chdOfficialTitlePattern = /(?:-(?:CHD|CHDBits|CHDWEB|CHDTV|CHDPAD|CHDHKTV|SGNB|OneHD|blucook|KAN|JKCT|BMDru|Destiny|SP)|@CHDBits)(?:\s|$)/i;
+
 const parseSizeText = function (sizeText) {
   const match = (sizeText || '').replace(/\u00a0/g, ' ').match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/i);
   if (!match) return 0;
@@ -40,6 +42,10 @@ exports.buildChdPageUrls = function (pageUrl, pageCount = 2) {
   });
 };
 
+exports.isChdOfficialTitle = function (name) {
+  return chdOfficialTitlePattern.test(String(name || ''));
+};
+
 exports.parseChd = function (html, pageUrl, cookie) {
   const document = new JSDOM(html, { url: pageUrl }).window.document;
   const loginForm = document.querySelector('form[action*="takelogin"]');
@@ -63,6 +69,8 @@ exports.parseChd = function (html, pageUrl, cookie) {
     const sourceKey = torrentIdentity.getTorrentSourceKey({ id, link: detailsUrl, url: downloadUrl }, pageUrl);
     const timeText = row.querySelector('td.rowfollow.nowrap span[title]')?.getAttribute('title') || '';
     const hash = crypto.createHash('sha1').update(`web-monitor:${sourceKey}`).digest('hex');
+    const siteOfficial = Array.from(row.querySelectorAll('*'))
+      .some(element => element.textContent.replace(/\u00a0/g, ' ').trim() === '官方');
     torrents.push({
       id,
       hash,
@@ -72,6 +80,7 @@ exports.parseChd = function (html, pageUrl, cookie) {
       url: downloadUrl,
       description: row.textContent.replace(/\s+/g, ' ').trim(),
       pubTime: moment(timeText, 'YYYY-MM-DD HH:mm:ss', true).isValid() ? moment(timeText, 'YYYY-MM-DD HH:mm:ss').unix() : 0,
+      siteOfficial: siteOfficial ? 1 : 0,
       sourceKey,
       sourceType: 'web',
       downloadCookie: cookie

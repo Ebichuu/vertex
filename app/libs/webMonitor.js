@@ -80,6 +80,12 @@ exports.enrichTorrents = async function (torrents, options) {
       const name = nameBuffer && nameBuffer.toString();
       const size = metadata.info.length || (metadata.info.files || []).reduce((sum, file) => sum + file.length, 0);
       if (!name || !size) throw new Error('种子文件缺少完整标题或大小');
+      const titleOfficial = parser.isChdOfficialTitle(name);
+      if (torrent.siteOfficial && !titleOfficial) {
+        logger.warn('网页监控 CHD 官种标签与标题后缀不一致，将以官种标签分流:', torrent.sourceKey, name);
+      } else if (!torrent.siteOfficial && titleOfficial) {
+        logger.warn('网页监控 CHD 标题后缀显示官种但列表页无官种标签，将以标题规则分流:', torrent.sourceKey, name);
+      }
 
       const filepath = path.join(__dirname, '../../torrents', hash + '.torrent');
       fs.writeFileSync(filepath, buffer);

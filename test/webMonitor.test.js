@@ -37,6 +37,7 @@ const html = `
     <td>
       <a href="details.php?id=575778&amp;hit=1"><b>Recommendations from Iwamoto Senpai</b></a>
       <a href="download.php?id=575778">download</a>
+      <span class="tag-official">官方</span><span class="tag-subtitle">中字</span>
     </td>
     <td></td><td></td><td>1.50 GiB</td>
     <td class="rowfollow nowrap"><span title="2026-08-30 02:07:16">6 min</span></td>
@@ -46,7 +47,13 @@ assert.strictEqual(parsed.length, 1);
 assert.strictEqual(parsed[0].sourceKey, 'ptchdbits.co:575778');
 assert.strictEqual(parsed[0].sourceType, 'web');
 assert.strictEqual(parsed[0].size, 1.5 * 1024 ** 3);
+assert.strictEqual(parsed[0].siteOfficial, 1);
 assert.ok(parsed[0].pubTime > 0);
+assert.strictEqual(webMonitorParser.isChdOfficialTitle('Example.Release.2160p-CHD'), true);
+assert.strictEqual(webMonitorParser.isChdOfficialTitle('Example.Release.2160p-Other'), false);
+
+const parsedWithoutOfficialTag = webMonitorParser.parseChd(html.replace('<span class="tag-official">官方</span>', ''), pageUrls[0], 'session=test');
+assert.strictEqual(parsedWithoutOfficialTag[0].siteOfficial, 0);
 
 const cursor = new WebMonitorCursor({ startedAt: 1000, initialLookbackSeconds: 120 });
 const firstSelection = cursor.selectNew([
@@ -93,6 +100,7 @@ const testMetadataEnrichment = async function () {
     assert.strictEqual(result[0].hash, expectedHash);
     assert.strictEqual(result[0].name, 'The Fast and the Furious 2001 2160p x265 10bit-CHD');
     assert.strictEqual(result[0].size, 1024);
+    assert.strictEqual(result[0].siteOfficial, 1);
     assert.strictEqual(result[0].sourceKey, parsed[0].sourceKey);
     assert.ok(fs.existsSync(filepath));
   } finally {
