@@ -697,12 +697,14 @@ class Rss {
       }
       try {
         let truehash = '';
+        let recordTorrent = torrent;
         this.addCount += 1;
         if (this.pushTorrentFile || torrent.downloadCookie) {
           let filepath;
           let hash;
+          let size;
           try {
-            ({ filepath, hash } = await this._downloadTorrent(torrent.url, torrent.hash, torrent.downloadCookie));
+            ({ filepath, hash, size } = await this._downloadTorrent(torrent.url, torrent.hash, torrent.downloadCookie));
           } catch (downloadError) {
             if (torrent.downloadCookie) throw downloadError;
             logger.error(this.alias, '下载种子文件失败，尝试使用链接推送:', downloadError.message);
@@ -710,6 +712,7 @@ class Rss {
           }
           if (filepath) {
             truehash = hash;
+            if (size) recordTorrent = { ...torrent, size };
             await client.addTorrentByTorrentFile(filepath, hash, false, this.uploadLimit, this.downloadLimit, savePath, category, this.autoTMM, this.paused);
           }
         } else {
@@ -738,10 +741,9 @@ class Rss {
         } catch (e) {
           logger.error('通知信息发送失败: \n', e);
         }
-        pushAddRow(torrent.hash, torrent, category, '添加种子', client.id);
-        if (truehash && torrent.hash !== truehash) {
-          pushAddRow(truehash, torrent, category, '添加种子', client.id);
-        }
+        // 网页监控在列表阶段使用稳定占位 hash，下载种子文件后只记录真实
+        // infohash，避免同一个站点种子在历史中出现两条“添加种子”。
+        pushAddRow(truehash || torrent.hash, recordTorrent, category, '添加种子', client.id);
         return records;
       } catch (error) {
         logger.error(this.alias, '下载器', client.alias, '添加种子失败:', error.message);

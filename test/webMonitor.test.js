@@ -1,7 +1,27 @@
 const assert = require('assert');
+const bencode = require('bencode');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const TorrentBatchBuffer = require('../app/libs/queues/TorrentBatchBuffer');
 const WebMonitorCursor = require('../app/libs/webMonitorCursor');
+const loggerPath = require.resolve('../app/libs/logger');
+require.cache[loggerPath] = {
+  id: loggerPath,
+  filename: loggerPath,
+  loaded: true,
+  exports: { debug () {}, info () {}, warn () {}, error () {} }
+};
+const utilPath = require.resolve('../app/libs/util');
+const util = { requestPromise: async () => { throw new Error('unexpected request'); } };
+require.cache[utilPath] = {
+  id: utilPath,
+  filename: utilPath,
+  loaded: true,
+  exports: util
+};
+const webMonitor = require('../app/libs/webMonitor');
 const webMonitorParser = require('../app/libs/webMonitorParser');
 
 const pageUrls = webMonitorParser.buildChdPageUrls('https://ptchdbits.co/torrents.php', 2);
@@ -44,6 +64,48 @@ assert.deepStrictEqual(
   []
 );
 assert.strictEqual(cursor.lastSkippedCount, 1);
+
+const testMetadataEnrichment = async function () {
+  const metadata = {
+    announce: Buffer.from('https://tracker.invalid/announce'),
+    info: {
+      length: 1024,
+      name: Buffer.from('The Fast and the Furious 2001 2160p x265 10bit-CHD'),
+      'piece length': 16384,
+      pieces: Buffer.alloc(20)
+    }
+  };
+  const buffer = bencode.encode(metadata);
+  const expectedHash = crypto.createHash('sha1').update(bencode.encode(metadata.info)).digest('hex');
+  const torrentDir = path.join(__dirname, '../torrents');
+  const torrentDirExisted = fs.existsSync(torrentDir);
+  if (!torrentDirExisted) fs.mkdirSync(torrentDir, { recursive: true });
+  const filepath = path.join(torrentDir, expectedHash + '.torrent');
+  const originalRequestPromise = util.requestPromise;
+  let requestCount = 0;
+  util.requestPromise = async () => {
+    requestCount += 1;
+    return { statusCode: 200, body: buffer };
+  };
+  try {
+    const result = await webMonitor.enrichTorrents([parsed[0]], { parserType: 'chd', cookie: 'session=test' });
+    assert.strictEqual(requestCount, 1);
+    assert.strictEqual(result[0].hash, expectedHash);
+    assert.strictEqual(result[0].name, 'The Fast and the Furious 2001 2160p x265 10bit-CHD');
+    assert.strictEqual(result[0].size, 1024);
+    assert.strictEqual(result[0].sourceKey, parsed[0].sourceKey);
+    assert.ok(fs.existsSync(filepath));
+  } finally {
+    util.requestPromise = originalRequestPromise;
+    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    if (!torrentDirExisted && fs.existsSync(torrentDir)) fs.rmdirSync(torrentDir);
+  }
+};
+cursor.forget([{ sourceKey: 'chd:new' }]);
+assert.deepStrictEqual(
+  cursor.selectNew([{ sourceKey: 'chd:new', pubTime: 1701 }], { now: 1701, maxAgeSeconds: 600 }).map(item => item.sourceKey),
+  ['chd:new']
+);
 assert.deepStrictEqual(
   cursor.selectNew([{ sourceKey: 'chd:after-sleep', pubTime: 1701 }], { now: 1701, maxAgeSeconds: 600, skipAll: true }),
   []
@@ -63,7 +125,6 @@ assert.strictEqual(buffer.size('official'), 0);
 
 const testQueueMerging = async function () {
   const redisPath = require.resolve('../app/libs/redis');
-  const loggerPath = require.resolve('../app/libs/logger');
   const queuePath = require.resolve('../app/libs/queues/RssTaskQueue');
 
   class FakeTaskQueue {
@@ -128,7 +189,8 @@ const testQueueMerging = async function () {
   assert.deepStrictEqual(processed[2].map(item => item.sourceKey), ['ptchdbits.co:575781']);
 };
 
-testQueueMerging()
+testMetadataEnrichment()
+  .then(testQueueMerging)
   .then(() => console.log('web monitor tests passed'))
   .catch(error => {
     console.error(error);

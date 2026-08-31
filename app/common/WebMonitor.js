@@ -67,8 +67,15 @@ class WebMonitor {
       this.lastNewCount = newTorrents.length;
       this.lastSkippedCount = this.cursor.lastSkippedCount;
       if (newTorrents.length > 0) {
-        await global.rssSourceManager.dispatchExternal(this.targetSharedSource, newTorrents, '网页监控');
-        this.lastFoundTime = Math.floor(Date.now() / 1000);
+        try {
+          const enrichedTorrents = await webMonitor.enrichTorrents(newTorrents, this.options);
+          await global.rssSourceManager.dispatchExternal(this.targetSharedSource, enrichedTorrents, '网页监控');
+          this.lastFoundTime = Math.floor(Date.now() / 1000);
+        } catch (error) {
+          // 种子文件或分发短时失败时允许下一轮重试，避免把截断标题误分流后永久跳过。
+          this.cursor.forget(newTorrents);
+          throw error;
+        }
       }
       this.lastSuccessTime = Math.floor(Date.now() / 1000);
       this.lastError = '';

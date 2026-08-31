@@ -49,6 +49,13 @@ class WebMonitorCursor {
     this._prune();
     return selected;
   }
+
+  forget (torrents) {
+    for (const torrent of torrents) {
+      const key = this._key(torrent);
+      if (key) this.seen.delete(key);
+    }
+  }
 }
 
 module.exports = WebMonitorCursor;
