@@ -21,7 +21,12 @@ class ClientLoadBalancer {
   _getMetrics (client) {
     const maindata = client.maindata || {};
     const uploadCapacity = Math.max(1, Number(client.uploadBandwidth) || 125000000);
-    const uploadUtilization = Math.max(0, Number(maindata.uploadSpeed) || 0) / uploadCapacity;
+    const uploadSpeed = Math.max(
+      0,
+      Number(maindata.uploadSpeed) || 0,
+      Number(client.avgUploadSpeed) || 0
+    );
+    const uploadUtilization = Math.min(1, uploadSpeed / uploadCapacity);
     const leechingCount = Math.max(0, Number(maindata.leechingCount) || 0);
     const seedingCount = Math.max(0, Number(maindata.seedingCount) || 0);
     const torrentLoad = leechingCount * 2 + seedingCount + this.plannedTorrentCount[client.id];
@@ -32,14 +37,11 @@ class ClientLoadBalancer {
 
   _scoreClients (clients) {
     const rows = clients.map(client => ({ client, metrics: this._getMetrics(client) }));
-    const maxUploadUtilization = Math.max(0, ...rows.map(row => row.metrics.uploadUtilization));
     const maxTorrentLoad = Math.max(0, ...rows.map(row => row.metrics.torrentLoad));
     const maxFreeSpace = Math.max(0, ...rows.map(row => row.metrics.freeSpace));
 
     return rows.map(row => {
-      const uploadPressure = maxUploadUtilization > 0
-        ? row.metrics.uploadUtilization / maxUploadUtilization
-        : 0;
+      const uploadPressure = row.metrics.uploadUtilization;
       const torrentPressure = maxTorrentLoad > 0
         ? row.metrics.torrentLoad / maxTorrentLoad
         : 0;

@@ -12,9 +12,10 @@ const store = {
   set: async () => {}
 };
 
-const makeClient = (id, uploadSpeed, seedingCount, leechingCount, freeSpaceOnDisk) => ({
+const makeClient = (id, uploadSpeed, seedingCount, leechingCount, freeSpaceOnDisk, avgUploadSpeed = 0) => ({
   id,
   uploadBandwidth: 1024 * 1024 * 1024,
+  avgUploadSpeed,
   maindata: { uploadSpeed, seedingCount, leechingCount, freeSpaceOnDisk }
 });
 
@@ -42,5 +43,27 @@ const spaceLimited = new ClientLoadBalancer([
   makeClient('ean', 0, 0, 0, 20 * 1024 ** 3)
 ], spaceCursor);
 assert.strictEqual(spaceLimited.select(10 * 1024 ** 3).id, 'ean');
+
+const absolutePressureCursor = new ClientAllocationCursor({ rssId: 'absolute', store, logger: silentLogger, alias: 'absolute' });
+const absolutePressure = new ClientLoadBalancer([
+  makeClient('crowded', 0.2 * 1024 ** 2, 5, 57, 82 * 1024 ** 3),
+  makeClient('available', 5 * 1024 ** 2, 4, 1, 112 * 1024 ** 3)
+], absolutePressureCursor);
+assert.strictEqual(absolutePressure.select(3 * 1024 ** 3).id, 'available');
+
+const emaCursor = new ClientAllocationCursor({ rssId: 'ema', store, logger: silentLogger, alias: 'ema' });
+const emaPressure = new ClientLoadBalancer([
+  makeClient('recently-busy', 0, 10, 0, 200 * 1024 ** 3, 800 * 1024 ** 2),
+  makeClient('steady', 100 * 1024 ** 2, 10, 0, 200 * 1024 ** 3, 100 * 1024 ** 2)
+], emaCursor);
+assert.strictEqual(emaPressure.select(1024).id, 'steady');
+
+const cappedCursor = new ClientAllocationCursor({ rssId: 'capped', store, logger: silentLogger, alias: 'capped' });
+const cappedPressure = new ClientLoadBalancer([
+  makeClient('over-capacity', 2 * 1024 ** 3, 0, 0, 200 * 1024 ** 3),
+  makeClient('idle', 0, 0, 0, 200 * 1024 ** 3)
+], cappedCursor);
+const cappedDetails = cappedPressure.getScoreDetails();
+assert.strictEqual(cappedDetails.find(row => row.client.id === 'over-capacity').uploadPressure, 1);
 
 console.log('client load balancer tests passed');
