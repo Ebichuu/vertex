@@ -7,6 +7,23 @@ const numberOr = (value, fallback) => {
 
 const textOrEmpty = value => typeof value === 'string' ? value : '';
 
+const parsePeerEndpoint = (peerKey, peer = {}) => {
+  const explicitIp = textOrEmpty(peer.ip).trim();
+  const explicitPort = Math.floor(numberOr(peer.port, 0));
+  if (explicitIp) return { ip: explicitIp, port: explicitPort };
+
+  const endpoint = textOrEmpty(peerKey).trim();
+  const bracketed = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (bracketed) return { ip: bracketed[1], port: Number(bracketed[2]) };
+  const separator = endpoint.lastIndexOf(':');
+  if (separator === -1) return { ip: endpoint, port: 0 };
+  const port = Number(endpoint.substring(separator + 1));
+  return {
+    ip: endpoint.substring(0, separator).replace(/^\[|\]$/g, ''),
+    port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0
+  };
+};
+
 class PeerObserver {
   constructor (options = {}) {
     this.enabled = options.enabled !== false;
@@ -93,8 +110,11 @@ class PeerObserver {
   _makePeerState (peerKey, peer, sampleAt) {
     const progress = numberOr(peer.progress, 0);
     const isComplete = progress >= 0.999999;
+    const endpoint = parsePeerEndpoint(peerKey, peer);
     return {
       peerKey: this._fingerprint(peerKey),
+      peerIp: endpoint.ip,
+      peerPort: endpoint.port,
       firstSeenAt: sampleAt,
       lastSeenAt: sampleAt,
       removedAt: null,
@@ -116,11 +136,14 @@ class PeerObserver {
     };
   }
 
-  _updatePeerState (state, peer, sampleAt) {
+  _updatePeerState (state, peerKey, peer, sampleAt) {
     const progress = numberOr(peer.progress, state.maxProgress);
+    const endpoint = parsePeerEndpoint(peerKey, peer);
     state.lastSeenAt = sampleAt;
     state.removedAt = null;
     state.maxProgress = Math.max(state.maxProgress, progress);
+    state.peerIp = endpoint.ip || state.peerIp;
+    state.peerPort = endpoint.port || state.peerPort;
     if (!state.firstCompleteAt && progress >= 0.999999) state.firstCompleteAt = sampleAt;
     state.clientName = textOrEmpty(peer.client || peer.peer_id_client) || state.clientName;
     state.connection = textOrEmpty(peer.connection) || state.connection;
@@ -147,6 +170,8 @@ class PeerObserver {
   _publicPeerState (state) {
     return {
       peerKey: state.peerKey,
+      peerIp: state.peerIp,
+      peerPort: state.peerPort,
       firstSeenAt: state.firstSeenAt,
       lastSeenAt: state.lastSeenAt,
       removedAt: state.removedAt,
@@ -184,7 +209,7 @@ class PeerObserver {
         state = this._makePeerState(peerKey, peerDelta, sampleAt);
         states.set(peerKey, state);
       } else {
-        this._updatePeerState(state, peerDelta, sampleAt);
+        this._updatePeerState(state, peerKey, peerDelta, sampleAt);
       }
       activeKeys.add(peerKey);
       if (this._needsPersist(state, sampleAt, isNew)) {

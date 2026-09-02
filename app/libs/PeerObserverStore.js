@@ -25,6 +25,8 @@ class PeerObserverStore {
     const rows = peers.map(peer => [
       sessionId,
       peer.peerKey,
+      peer.peerIp,
+      peer.peerPort,
       peer.firstSeenAt,
       peer.lastSeenAt,
       peer.removedAt,
@@ -44,12 +46,14 @@ class PeerObserverStore {
     ]);
     await util.runRecords(`
       INSERT INTO peer_observer_peers
-        (session_id, peer_key, first_seen_at, last_seen_at, removed_at, first_progress,
+        (session_id, peer_key, peer_ip, peer_port, first_seen_at, last_seen_at, removed_at, first_progress,
          max_progress, first_complete_at, complete_on_first_seen, client_name, connection,
          country_code, flags, max_download_speed, max_upload_speed, downloaded, uploaded,
          sample_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, peer_key) DO UPDATE SET
+        peer_ip = CASE WHEN excluded.peer_ip = '' THEN peer_ip ELSE excluded.peer_ip END,
+        peer_port = CASE WHEN excluded.peer_port = 0 THEN peer_port ELSE excluded.peer_port END,
         first_seen_at = MIN(first_seen_at, excluded.first_seen_at),
         last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
         removed_at = excluded.removed_at,

@@ -52,7 +52,7 @@ const runMigrations = function () {
       ON daily_stats (stats_date);
     `);
 
-    // 实验性 qB Peer 增量观察：只保存匿名摘要，不保存 peer IP/端口。
+    // 实验性 qB Peer 增量观察：数据库保存端点供线路分析，日志不输出完整 IP。
     db.exec(`
       CREATE TABLE IF NOT EXISTS peer_observer_sessions (
         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +83,8 @@ const runMigrations = function () {
         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
         session_id INTEGER NOT NULL,
         peer_key TEXT NOT NULL,
+        peer_ip TEXT NOT NULL DEFAULT '',
+        peer_port INTEGER NOT NULL DEFAULT 0,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         removed_at INTEGER,
@@ -110,6 +112,14 @@ const runMigrations = function () {
     if (peerSessionColumns.indexOf('initial_complete_peer_count') === -1) {
       db.exec('ALTER TABLE peer_observer_sessions ADD COLUMN initial_complete_peer_count INTEGER NOT NULL DEFAULT 0');
     }
+    const peerObserverColumns = db.prepare('PRAGMA table_info(peer_observer_peers)').all().map(item => item.name);
+    if (peerObserverColumns.indexOf('peer_ip') === -1) {
+      db.exec('ALTER TABLE peer_observer_peers ADD COLUMN peer_ip TEXT NOT NULL DEFAULT \'\'');
+    }
+    if (peerObserverColumns.indexOf('peer_port') === -1) {
+      db.exec('ALTER TABLE peer_observer_peers ADD COLUMN peer_port INTEGER NOT NULL DEFAULT 0');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_peer_observer_peer_ip ON peer_observer_peers (peer_ip)');
     
     // 🚀 性能优化：添加关键索引
     logger.info('开始创建性能优化索引...');

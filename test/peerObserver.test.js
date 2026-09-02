@@ -87,10 +87,14 @@ const run = async () => {
   const seeder = peerWrites.filter(peer => peer.completeOnFirstSeen).pop();
   assert.ok(seeder);
   assert.strictEqual(seeder.peerKey.length, 24);
+  assert.strictEqual(seeder.peerIp, '198.51.100.20');
+  assert.strictEqual(seeder.peerPort, 51413);
   assert.strictEqual(seeder.removedAt, 1001);
-  assert.ok(peerWrites.every(peer => !JSON.stringify(peer).includes(rawSeederKey)));
-  assert.ok(peerWrites.every(peer => !JSON.stringify(peer).includes(rawLeecherKey)));
   assert.strictEqual(observer._fingerprint(rawSeederKey), observer._fingerprint(rawSeederKey));
+
+  const ipv6State = observer._makePeerState('[2001:db8::20]:6881', {}, 1002);
+  assert.strictEqual(ipv6State.peerIp, '2001:db8::20');
+  assert.strictEqual(ipv6State.peerPort, 6881);
 
   const invalidObserver = new PeerObserver({ logger: silentLogger, store });
   assert.strictEqual(invalidObserver.observe(client, 'fakehash'), false);
