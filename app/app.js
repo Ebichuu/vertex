@@ -19,6 +19,8 @@ const Site = require('./common/Site');
 const Watch = require('./common/Watch');
 const IRC = require('./common/IRC');
 const WebMonitor = require('./common/WebMonitor');
+const PeerObserver = require('./libs/PeerObserver');
+const PeerObserverStore = require('./libs/PeerObserverStore');
 
 const sites = require('./libs/site');
 const logger = require('./libs/logger');
@@ -58,6 +60,9 @@ const init = function () {
       logger.info('开始执行数据库清理任务...');
       await util.runRecord('delete from torrent_flow where time < ?', [moment().unix() - 1]);
       await util.runRecord('delete from tracker_flow where time < ?', [moment().unix() - 7 * 24 * 3600]);
+      const peerObserverRetention = moment().unix() - 30 * 24 * 3600;
+      await util.runRecord('delete from peer_observer_peers where session_id in (select id from peer_observer_sessions where started_at < ?)', [peerObserverRetention]);
+      await util.runRecord('delete from peer_observer_sessions where started_at < ?', [peerObserverRetention]);
       execSync('rm -f /tmp/Vertex-backups-*');
       logger.info('数据库清理任务完成');
     } catch (e) {
@@ -261,6 +266,21 @@ const init = function () {
   global.runningWatch = {};
   global.runningIRC = {};
   global.runningWebMonitor = {};
+  global.peerObserver = new PeerObserver({
+    enabled: process.env.PEER_OBSERVER_ENABLED !== 'false',
+    logger,
+    store: new PeerObserverStore(),
+    fastIntervalMs: Number(process.env.PEER_OBSERVER_FAST_INTERVAL_MS) || 1000,
+    slowIntervalMs: Number(process.env.PEER_OBSERVER_SLOW_INTERVAL_MS) || 5000,
+    fastWindowMs: Number(process.env.PEER_OBSERVER_FAST_WINDOW_MS) || 5 * 60 * 1000,
+    maxDurationMs: Number(process.env.PEER_OBSERVER_MAX_DURATION_MS) || 20 * 60 * 1000,
+    postCompletionMs: Number(process.env.PEER_OBSERVER_POST_COMPLETION_MS) || 60 * 1000,
+    maxConcurrent: Number(process.env.PEER_OBSERVER_MAX_CONCURRENT) || 12,
+    maxConsecutiveErrors: Number(process.env.PEER_OBSERVER_MAX_ERRORS) || 15,
+    // 默认复用本实例稳定的密码摘要作为 HMAC key；数据库中只保存匿名指纹。
+    secret: process.env.PEER_OBSERVER_SECRET || setting.password
+  });
+  logger.info('qB Peer 增量观察器:', global.peerObserver.enabled ? '已启用（实验）' : '已禁用');
   global.startTime = moment().unix();
   initPush();
   for (const client of util.listClient()) {
@@ -376,6 +396,11 @@ function setupGracefulShutdown() {
       if (global.queueMonitor) {
         global.queueMonitor.stop();
         logger.info('队列监控任务已停止');
+      }
+
+      if (global.peerObserver) {
+        global.peerObserver.stop();
+        logger.info('qB Peer 增量观察器已停止');
       }
 
       // 停止所有运行中的组件

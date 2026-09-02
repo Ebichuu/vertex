@@ -51,6 +51,65 @@ const runMigrations = function () {
       CREATE INDEX IF NOT EXISTS index_daily_stats_date
       ON daily_stats (stats_date);
     `);
+
+    // 实验性 qB Peer 增量观察：只保存匿名摘要，不保存 peer IP/端口。
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS peer_observer_sessions (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        client_id TEXT NOT NULL,
+        torrent_hash TEXT NOT NULL,
+        torrent_name TEXT NOT NULL DEFAULT '',
+        torrent_size INTEGER NOT NULL DEFAULT 0,
+        rss_id TEXT NOT NULL DEFAULT '',
+        rss_alias TEXT NOT NULL DEFAULT '',
+        source_type TEXT NOT NULL DEFAULT '',
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        status TEXT NOT NULL DEFAULT 'observing',
+        poll_count INTEGER NOT NULL DEFAULT 0,
+        peer_count INTEGER NOT NULL DEFAULT 0,
+        complete_peer_count INTEGER NOT NULL DEFAULT 0,
+        initial_complete_peer_count INTEGER NOT NULL DEFAULT 0,
+        first_complete_peer_at INTEGER,
+        local_completed_at INTEGER,
+        last_error TEXT NOT NULL DEFAULT ''
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_observer_session_torrent
+      ON peer_observer_sessions (client_id, torrent_hash, started_at);
+      CREATE INDEX IF NOT EXISTS idx_peer_observer_session_started
+      ON peer_observer_sessions (started_at);
+
+      CREATE TABLE IF NOT EXISTS peer_observer_peers (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        peer_key TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        removed_at INTEGER,
+        first_progress REAL NOT NULL DEFAULT 0,
+        max_progress REAL NOT NULL DEFAULT 0,
+        first_complete_at INTEGER,
+        complete_on_first_seen INTEGER NOT NULL DEFAULT 0,
+        client_name TEXT NOT NULL DEFAULT '',
+        connection TEXT NOT NULL DEFAULT '',
+        country_code TEXT NOT NULL DEFAULT '',
+        flags TEXT NOT NULL DEFAULT '',
+        max_download_speed INTEGER NOT NULL DEFAULT 0,
+        max_upload_speed INTEGER NOT NULL DEFAULT 0,
+        downloaded INTEGER NOT NULL DEFAULT 0,
+        uploaded INTEGER NOT NULL DEFAULT 0,
+        sample_count INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, peer_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_peer_observer_peer_session
+      ON peer_observer_peers (session_id);
+      CREATE INDEX IF NOT EXISTS idx_peer_observer_peer_complete
+      ON peer_observer_peers (complete_on_first_seen, first_complete_at);
+    `);
+    const peerSessionColumns = db.prepare('PRAGMA table_info(peer_observer_sessions)').all().map(item => item.name);
+    if (peerSessionColumns.indexOf('initial_complete_peer_count') === -1) {
+      db.exec('ALTER TABLE peer_observer_sessions ADD COLUMN initial_complete_peer_count INTEGER NOT NULL DEFAULT 0');
+    }
     
     // 🚀 性能优化：添加关键索引
     logger.info('开始创建性能优化索引...');

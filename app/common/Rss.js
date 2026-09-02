@@ -729,6 +729,18 @@ class Rss {
           }
         }
 
+        // Peer 观察器完全旁路运行；此处只提交任务，不等待任何 qB peer 请求。
+        const observedHash = String(truehash || torrent.hash || '').toLowerCase();
+        if (global.peerObserver) {
+          global.peerObserver.observe(client, observedHash, {
+            torrentName: recordTorrent.name,
+            torrentSize: recordTorrent.size,
+            rssId: this.id,
+            rssAlias: this.alias,
+            sourceType: torrent.sourceType || 'rss'
+          });
+        }
+
         // 将种子添加到Redis缓存，用于跳过相同种子检查
         await this.cacheTorrentToClient(client.id, torrent);
         if (truehash && torrent.hash !== truehash) {

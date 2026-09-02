@@ -240,6 +240,32 @@ exports.getTrackerList = async (clientUrl, cookie, hash) => {
   return res;
 };
 
+exports.getTorrentPeers = async (clientUrl, cookie, hash, rid = 0) => {
+  const message = {
+    url: clientUrl + `/api/v2/sync/torrentPeers?hash=${encodeURIComponent(hash)}&rid=${encodeURIComponent(rid)}`,
+    timeout: 5000,
+    headers: {
+      cookie
+    }
+  };
+  const res = await util.requestPromise(message);
+  if (res.statusCode === 403 || (res.body && res.body.startsWith('Forbidden'))) {
+    throw new Error('qBittorrent peer API unauthorized');
+  }
+  if (res.statusCode !== 200) {
+    throw new Error(`qBittorrent peer API status ${res.statusCode}`);
+  }
+  if (!res.body) {
+    throw new Error('Empty response from qBittorrent peer API');
+  }
+  try {
+    return JSON.parse(res.body);
+  } catch (error) {
+    // 不把响应正文带入错误，避免意外记录 peer 端点。
+    throw new Error('Invalid JSON response from qBittorrent peer API');
+  }
+};
+
 exports.getFiles = async (clientUrl, cookie, hash) => {
   const message = {
     url: clientUrl + `/api/v2/torrents/files?hash=${hash}`,

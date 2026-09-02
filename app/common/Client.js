@@ -484,6 +484,16 @@ class Client {
     }
   }
 
+  async getTorrentPeers (hash, rid = 0) {
+    if (this._client.type !== 'qBittorrent') {
+      throw new Error('Peer 增量观察仅支持 qBittorrent');
+    }
+    if (!this.status || !this.cookie) {
+      throw new Error('客户端' + this.alias + '当前状态为不可用');
+    }
+    return this.client.getTorrentPeers(this.clientUrl, this.cookie, hash, rid);
+  }
+
   async addTorrentByTorrentFile(filepath, hash, isSkipChecking = false, uploadLimit = 0, downloadLimit = 0, savePath, category, autoTMM, paused) {
     const { statusCode } = await this.client.addTorrentByTorrentFile(this.clientUrl, this.cookie, filepath, isSkipChecking, uploadLimit, downloadLimit, savePath, category, autoTMM, this.firstLastPiecePrio, paused);
     if (statusCode !== 200 && statusCode !== 204) {
