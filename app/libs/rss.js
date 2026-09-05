@@ -8,6 +8,7 @@ const util = require('./util');
 const redis = require('./redis');
 const logger = require('./logger');
 const torrentIdentity = require('./torrentIdentity');
+const webMonitorParser = require('./webMonitorParser');
 
 const parseXml = util.promisify(parser);
 
@@ -923,6 +924,9 @@ exports.getTorrents = async function (rssUrl, options = {}) {
       torrent.url = normalizeTorrentUrl(torrent.url);
       torrent.sourceKey = torrent.sourceKey || torrentIdentity.getTorrentSourceKey(torrent, rssUrl);
       torrent.sourceType = torrent.sourceType || 'rss';
+      if (host === 'ptchdbits.co' || host.endsWith('.ptchdbits.co')) {
+        Object.assign(torrent, webMonitorParser.applyChdClassification(torrent));
+      }
     });
     return torrents;
   } catch (e) {

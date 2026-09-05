@@ -89,12 +89,15 @@ exports.enrichTorrents = async function (torrents, options) {
 
       const filepath = path.join(__dirname, '../../torrents', hash + '.torrent');
       fs.writeFileSync(filepath, buffer);
-      return {
+      return parser.applyChdClassification({
         ...torrent,
         hash,
         name,
         size
-      };
+      }, {
+        siteOfficial: !!torrent.siteOfficial || titleOfficial,
+        siteRevived: !!torrent.siteRevived
+      });
     } catch (error) {
       throw new Error(`种子 ${torrent.sourceKey || torrent.id || 'unknown'} 元数据读取失败: ${error.message}`);
     }

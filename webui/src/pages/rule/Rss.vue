@@ -104,6 +104,7 @@
           label="限制条件"
           v-if="rssRule.type === 'normal'"
           name="conditions"
+          extra="CHD 主分类可填写官种、复活区或转载；三个标签字段填写 1 表示命中。官种位于复活区时会同时带官种和复活区标签，请让官种分支保持更高优先级。"
           :rules="[{ required: true, message: '${label}不可为空! ' }]">
           <a-table
             :style="`font-size: ${isMobile() ? '12px': '14px'};`"
@@ -115,7 +116,7 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'key'">
-                <a-select size="small" v-model:value="record.key"  >
+                <a-select size="small" v-model:value="record.key" @change="conditionKeyChanged(record)">
                   <a-select-option v-for="conditionKey of conditionKeys" :key="conditionKey.key" :value="conditionKey.key">{{ conditionKey.name }}</a-select-option>
                 </a-select>
               </template>
@@ -133,7 +134,16 @@
                 </a-select>
               </template>
               <template v-if="column.dataIndex === 'value'">
-                <a-input size="small" v-model:value="record.value"/>
+                <a-select v-if="record.key === 'chdCategory'" size="small" v-model:value="record.value" style="width: 100%">
+                  <a-select-option value="官种">官种</a-select-option>
+                  <a-select-option value="复活区">复活区</a-select-option>
+                  <a-select-option value="转载">转载</a-select-option>
+                </a-select>
+                <a-select v-else-if="['siteOfficial', 'siteRevived', 'siteRepost'].includes(record.key)" size="small" v-model:value="record.value" style="width: 100%">
+                  <a-select-option value="1">是</a-select-option>
+                  <a-select-option value="0">否</a-select-option>
+                </a-select>
+                <a-input v-else size="small" v-model:value="record.value"/>
               </template>
               <template v-if="column.dataIndex === 'option'">
                 <a style="color: red" @click="rssRule.conditions = rssRule.conditions.filter(item => item !== record)">删除</a>
@@ -224,6 +234,18 @@ export default {
       }, {
         name: '种子简介',
         key: 'description'
+      }, {
+        name: 'CHD 主分类（官种/复活区/转载）',
+        key: 'chdCategory'
+      }, {
+        name: 'CHD 官种标签（1/0）',
+        key: 'siteOfficial'
+      }, {
+        name: 'CHD 复活区标签（1/0）',
+        key: 'siteRevived'
+      }, {
+        name: 'CHD 转载标签（1/0）',
+        key: 'siteRepost'
       }],
       condition: {
         key: '',
@@ -249,6 +271,12 @@ export default {
     };
   },
   methods: {
+    conditionKeyChanged (condition) {
+      if (['chdCategory', 'siteOfficial', 'siteRevived', 'siteRepost'].includes(condition.key)) {
+        condition.compareType = 'equals';
+        condition.value = '';
+      }
+    },
     isMobile () {
       if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
         return true;

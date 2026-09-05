@@ -24,6 +24,8 @@ require.cache[utilPath] = {
 const webMonitor = require('../app/libs/webMonitor');
 const webMonitorParser = require('../app/libs/webMonitorParser');
 
+const momentUnix = value => Math.floor(new Date(`${value.replace(' ', 'T')}+08:00`).getTime() / 1000);
+
 const pageUrls = webMonitorParser.buildChdPageUrls('https://ptchdbits.co/torrents.php', 2);
 assert.strictEqual(pageUrls.length, 2);
 assert.strictEqual(new URL(pageUrls[0]).searchParams.get('sort'), '4');
@@ -48,12 +50,68 @@ assert.strictEqual(parsed[0].sourceKey, 'ptchdbits.co:575778');
 assert.strictEqual(parsed[0].sourceType, 'web');
 assert.strictEqual(parsed[0].size, 1.5 * 1024 ** 3);
 assert.strictEqual(parsed[0].siteOfficial, 1);
+assert.strictEqual(parsed[0].siteRevived, 0);
+assert.strictEqual(parsed[0].siteRepost, 0);
+assert.strictEqual(parsed[0].chdCategory, '官种');
+assert.deepStrictEqual(parsed[0].chdLabels, ['官种']);
 assert.ok(parsed[0].pubTime > 0);
 assert.strictEqual(webMonitorParser.isChdOfficialTitle('Example.Release.2160p-CHD'), true);
 assert.strictEqual(webMonitorParser.isChdOfficialTitle('Example.Release.2160p-Other'), false);
 
+const rssOfficial = webMonitorParser.applyChdClassification({ name: 'Example.Release.2160p-CHD' });
+assert.strictEqual(rssOfficial.chdCategory, '官种');
+assert.deepStrictEqual(rssOfficial.chdLabels, ['官种']);
+const rssRepost = webMonitorParser.applyChdClassification({ name: 'Example.Release.2160p-Other' });
+assert.strictEqual(rssRepost.chdCategory, '转载');
+assert.strictEqual(rssRepost.siteRepost, 1);
+
 const parsedWithoutOfficialTag = webMonitorParser.parseChd(html.replace('<span class="tag-official">官方</span>', ''), pageUrls[0], 'session=test');
 assert.strictEqual(parsedWithoutOfficialTag[0].siteOfficial, 0);
+assert.strictEqual(parsedWithoutOfficialTag[0].siteRepost, 1);
+assert.strictEqual(parsedWithoutOfficialTag[0].chdCategory, '转载');
+assert.deepStrictEqual(parsedWithoutOfficialTag[0].chdLabels, ['转载']);
+
+const revivalPageUrl = 'https://ptchdbits.co/renewtorrents.php';
+assert.deepStrictEqual(webMonitorParser.buildChdPageUrls(revivalPageUrl, 2), [revivalPageUrl]);
+const revivalHtml = `
+  <table class="torrents"><tbody>
+  <tr>
+    <td>Movie</td>
+    <td>
+      <a href="details.php?id=453132&amp;hit=1"><b>Revived non-official torrent</b></a>
+      <a href="download.php?id=453132">download</a>
+      <span class="free"><span title="2026-09-13 01:32:00">free</span></span>
+    </td>
+    <td></td><td></td><td>10.00 GiB</td>
+    <td class="rowfollow nowrap"><span title="2025-06-09 10:00:00">old</span></td>
+  </tr>
+  <tr>
+    <td>Movie</td>
+    <td>
+      <a href="details.php?id=527346&amp;hit=1"><b>Revived official torrent</b></a>
+      <a href="download.php?id=527346">download</a>
+      <span class="tag-official">官方</span>
+      <span class="free"><span title="2026-09-13 02:00:00">free</span></span>
+    </td>
+    <td></td><td></td><td>20.00 GiB</td>
+    <td class="rowfollow nowrap"><span title="2024-01-01 08:00:00">old</span></td>
+  </tr>
+  </tbody></table>`;
+const revived = webMonitorParser.parseChd(revivalHtml, revivalPageUrl, 'session=test');
+assert.strictEqual(revived.length, 2);
+assert.strictEqual(revived[0].siteOfficial, 0);
+assert.strictEqual(revived[0].siteRevived, 1);
+assert.strictEqual(revived[0].siteRepost, 0);
+assert.strictEqual(revived[0].chdCategory, '复活区');
+assert.deepStrictEqual(revived[0].chdLabels, ['复活区']);
+assert.strictEqual(revived[0].pubTime, momentUnix('2026-09-06 01:32:00'));
+assert.strictEqual(revived[0].originalPubTime, momentUnix('2025-06-09 10:00:00'));
+assert.ok(revived[0].sourceKey.endsWith(`:revived:${revived[0].revivalTime}`));
+assert.strictEqual(revived[1].siteOfficial, 1);
+assert.strictEqual(revived[1].siteRevived, 1);
+assert.strictEqual(revived[1].siteRepost, 0);
+assert.strictEqual(revived[1].chdCategory, '复活区');
+assert.deepStrictEqual(revived[1].chdLabels, ['官种', '复活区']);
 
 const cursor = new WebMonitorCursor({ startedAt: 1000, initialLookbackSeconds: 120 });
 const firstSelection = cursor.selectNew([

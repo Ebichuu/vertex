@@ -5,6 +5,12 @@ const { JSDOM } = require('jsdom');
 const torrentIdentity = require('./torrentIdentity');
 
 const chdOfficialTitlePattern = /(?:-(?:CHD|CHDBits|CHDWEB|CHDTV|CHDPAD|CHDHKTV|SGNB|OneHD|blucook|KAN|JKCT|BMDru|Destiny|SP)|@CHDBits)(?:\s|$)/i;
+const chdRevivalFreeSeconds = 7 * 24 * 60 * 60;
+
+const parseChdTime = function (value) {
+  const parsed = moment.parseZone(`${value} +08:00`, 'YYYY-MM-DD HH:mm:ss Z', true);
+  return parsed.isValid() ? parsed.unix() : 0;
+};
 
 const parseSizeText = function (sizeText) {
   const match = (sizeText || '').replace(/\u00a0/g, ' ').match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|GiB|TiB|KB|MB|GB|TB)\b/i);
@@ -46,8 +52,30 @@ exports.isChdOfficialTitle = function (name) {
   return chdOfficialTitlePattern.test(String(name || ''));
 };
 
+exports.applyChdClassification = function (torrent, options = {}) {
+  const siteOfficial = options.siteOfficial === undefined
+    ? exports.isChdOfficialTitle(torrent.name)
+    : !!options.siteOfficial;
+  const siteRevived = !!options.siteRevived;
+  const siteRepost = !siteOfficial && !siteRevived;
+  const chdLabels = [];
+  if (siteOfficial) chdLabels.push('官种');
+  if (siteRevived) chdLabels.push('复活区');
+  if (siteRepost) chdLabels.push('转载');
+
+  return {
+    ...torrent,
+    siteOfficial: siteOfficial ? 1 : 0,
+    siteRevived: siteRevived ? 1 : 0,
+    siteRepost: siteRepost ? 1 : 0,
+    chdCategory: siteRevived ? '复活区' : (siteOfficial ? '官种' : '转载'),
+    chdLabels
+  };
+};
+
 exports.parseChd = function (html, pageUrl, cookie) {
   const document = new JSDOM(html, { url: pageUrl }).window.document;
+  const isRevivalPage = /\/renewtorrents\.php$/i.test(new URL(pageUrl).pathname);
   const loginForm = document.querySelector('form[action*="takelogin"]');
   if (loginForm || !document.querySelector('table.torrents')) {
     throw new Error('网页监控未找到种子列表，请检查登录 Cookie 是否有效');
@@ -66,12 +94,21 @@ exports.parseChd = function (html, pageUrl, cookie) {
     if (!id) continue;
 
     const directCells = Array.from(row.children);
-    const sourceKey = torrentIdentity.getTorrentSourceKey({ id, link: detailsUrl, url: downloadUrl }, pageUrl);
+    const baseSourceKey = torrentIdentity.getTorrentSourceKey({ id, link: detailsUrl, url: downloadUrl }, pageUrl);
     const timeText = row.querySelector('td.rowfollow.nowrap span[title]')?.getAttribute('title') || '';
+    const originalPubTime = parseChdTime(timeText);
+    const rowTimes = Array.from(row.querySelectorAll('span[title]'))
+      .map(element => parseChdTime(element.getAttribute('title')))
+      .filter(Boolean);
+    const freeExpiresAt = isRevivalPage && rowTimes.length > 0 ? Math.max(...rowTimes) : 0;
+    const revivalTime = isRevivalPage && freeExpiresAt > originalPubTime
+      ? freeExpiresAt - chdRevivalFreeSeconds
+      : 0;
+    const sourceKey = revivalTime > 0 ? `${baseSourceKey}:revived:${revivalTime}` : baseSourceKey;
     const hash = crypto.createHash('sha1').update(`web-monitor:${sourceKey}`).digest('hex');
     const siteOfficial = Array.from(row.querySelectorAll('*'))
       .some(element => element.textContent.replace(/\u00a0/g, ' ').trim() === '官方');
-    torrents.push({
+    torrents.push(exports.applyChdClassification({
       id,
       hash,
       name: titleAnchor.querySelector('b').textContent.trim(),
@@ -79,12 +116,17 @@ exports.parseChd = function (html, pageUrl, cookie) {
       link: detailsUrl,
       url: downloadUrl,
       description: row.textContent.replace(/\s+/g, ' ').trim(),
-      pubTime: moment(timeText, 'YYYY-MM-DD HH:mm:ss', true).isValid() ? moment(timeText, 'YYYY-MM-DD HH:mm:ss').unix() : 0,
-      siteOfficial: siteOfficial ? 1 : 0,
+      pubTime: revivalTime || originalPubTime,
+      originalPubTime,
+      revivalTime,
+      freeExpiresAt,
       sourceKey,
       sourceType: 'web',
       downloadCookie: cookie
-    });
+    }, {
+      siteOfficial,
+      siteRevived: isRevivalPage
+    }));
   }
   return torrents;
 };
